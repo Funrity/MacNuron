@@ -969,7 +969,7 @@ A64Machine *a64_attempt_ipsw(A64ReadAt rd, void *ud, uint64_t total) {
         else LOG("[boot] DeviceTree: no cpu node with a 'state' property found, boot CPU not marked\n");
         char ch[1600]; size_t eb = 0; int ne = a64_dt_entropy(dt, dtlen, host_random, &eb, ch, sizeof ch);
         { /* 0.4.38 (MODELLED): properties AppleImage4 requires in /chosen that iBoot creates at run time and that the IPSW DeviceTree does not have */
-          size_t dtcap = dtlen + 8192; uint8_t *nd = realloc(dt, dtcap);
+          size_t dtcap = dtlen + 16384; uint8_t *nd = realloc(dt, dtcap);
           if (nd) {
               dt = nd;
               int a1 = a64_dt_chosen_add_u32(dt, &dtlen, dtcap, "security-domain", 1);
@@ -977,6 +977,17 @@ A64Machine *a64_attempt_ipsw(A64ReadAt rd, void *ud, uint64_t total) {
               int db = a64_dt_chosen_set_u64(dt, &dtlen, dtcap, "dram-base", A64M_IOS_RAM_BASE);
               int ds = a64_dt_chosen_set_u64(dt, &dtlen, dtcap, "dram-size", MAX_RAM);
               if (db == 1 || ds == 1) LOG("[boot] DeviceTree fix-up (MODELLED, iBoot does this): set /chosen 'dram-base' = 0x%llx and 'dram-size' = 0x%llx (macOS 11 AppleARMPE panics if /chosen lacks 'dram-base' or 'dram-size')\n", (unsigned long long)A64M_IOS_RAM_BASE, (unsigned long long)MAX_RAM);
+              { /* MODELLED (ASSUMPTION, PLACEHOLDER): macOS 11 kernel (0xfffffe0007d76394) reads /chosen/lock-regs/amcc and /chosen/lock-regs/amcc/amcc-ctrr-a properties that iBoot populates at boot; the IPSW DeviceTree nodes carry only name and AAPL,phandle. Providing aperture-count=0 (0 apertures) with 16 KiB page-size-shift=14 lets the kernel skip AMCC MMIO aperture checks and program the CTRR registers cleanly. */
+                uint32_t z32 = 0, pshift = 14;
+                static const char *const amcc_u32[] = { "aperture-count", "aperture-size", "plane-count", "plane-stride", "cache-status-reg-offset", "cache-status-reg-mask", "cache-status-reg-value" };
+                static const char *const ctrr_u32[] = { "lower-limit-reg-offset", "lower-limit-reg-mask", "upper-limit-reg-offset", "upper-limit-reg-mask", "lock-reg-offset", "lock-reg-mask", "lock-reg-value" };
+                int lr_added = 0;
+                for (int li = 0; li < 7; li++) if (a64_dt_node_add_prop(dt, &dtlen, dtcap, "amcc", amcc_u32[li], &z32, 4) == 1) lr_added++;
+                if (a64_dt_node_add_prop(dt, &dtlen, dtcap, "amcc", "aperture-phys-addr", &z32, 0) == 1) lr_added++;
+                if (a64_dt_node_add_prop(dt, &dtlen, dtcap, "amcc-ctrr-a", "page-size-shift", &pshift, 4) == 1) lr_added++;
+                for (int li = 0; li < 7; li++) if (a64_dt_node_add_prop(dt, &dtlen, dtcap, "amcc-ctrr-a", ctrr_u32[li], &z32, 4) == 1) lr_added++;
+                if (lr_added) LOG("[boot] DeviceTree fix-up (MODELLED, ASSUMPTION, PLACEHOLDER): added %d '/chosen/lock-regs/amcc' and 'amcc-ctrr-a' properties (aperture-count=0, page-size-shift=14) that iBoot normally populates\n", lr_added);
+              }
               if (rdk) { int ar = a64_dt_node_add_zero_prop(dt, &dtlen, dtcap, "memory-map", "RAMDisk", 16); LOG("[boot] DeviceTree fix-up (MODELLED, iBoot does this): /chosen/memory-map 'RAMDisk' %s (filled with the physical address and size once the layout is known)\n", ar == 1 ? "added" : ar == 0 ? "already present" : "NOT possible (no memory-map node?)"); }
               { /* 0.4.65/0.4.75: ApplePMGR.cpp:899 panics "voltage-statesN not found" one N per run (log 0.4.74: N=5 after N=1); every missing voltage-states0..15 becomes an empty property so the next runs do not stop on each index */
                 char vn[24], added[96] = ""; int na3 = 0, bad = 0;
