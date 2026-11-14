@@ -55,12 +55,14 @@ static bool timer_asserted(const A64 *c) {
     return (c->cntv_ctl & 1) && a64_counter(c) >= c->cntv_cval;
 }
 bool a64_irq_asserted(const A64 *c) {
-    return c->irq_line || (!(c->cntv_ctl & 2) && timer_asserted(c));
+    return c->irq_line || (!c->stub_impl_regs && !(c->cntv_ctl & 2) && timer_asserted(c));
 }
-/* MODELLED (0.4.33): the EL1 physical timer (CNTP) is delivered as a FIQ, as on Apple SoCs (the kernel's decrementer). Real hardware
-   gates this with Apple-specific registers; here only the architectural enable/mask bits of CNTP_CTL_EL0 count. */
+/* MODELLED (0.4.33): the EL1 physical timer (CNTP) and, on Apple SoCs (stub_impl_regs, e.g. M1/H13G VHE kernels), the virtual timer
+   (CNTV) are delivered as FIQs (the kernel's decrementer handled by sleh_fiq -> rtclock_intr). Real hardware gates this with
+   Apple-specific registers; here only the architectural enable/mask bits of CNTP_CTL_EL0 / CNTV_CTL_EL0 count. */
 static bool fiq_asserted(const A64 *c) {
-    return (c->cntp_ctl & 3) == 1 && a64_counter(c) >= c->cntp_cval;
+    return ((c->cntp_ctl & 3) == 1 && a64_counter(c) >= c->cntp_cval) ||
+           (c->stub_impl_regs && (c->cntv_ctl & 3) == 1 && a64_counter(c) >= c->cntv_cval);
 }
 static uint64_t timer_wait_ticks(const A64 *c) {      /* ticks until the nearest enabled, unmasked timer fires (0 = none) */
     uint64_t now = a64_counter(c), best = 0;
@@ -569,7 +571,8 @@ static int sysreg_read(A64 *c, unsigned k, uint64_t *out) {
     case SYSKEY(3,0,7,4,0): *out = c->par_el1; return 0;
     case SYSKEY(3,0,14,1,0): *out = c->cntkctl_el1; return 0;
     case SYSKEY(3,3,14,0,0): *out = A64_TIMER_HZ; return 0;            /* CNTFRQ_EL0 */
-    case SYSKEY(3,3,14,0,1): case SYSKEY(3,3,14,0,2): *out = cnt; return 0; /* CNTPCT/CNTVCT */
+    case SYSKEY(3,3,14,0,1): case SYSKEY(3,3,14,0,2):
+    case SYSKEY(3,4,15,10,6): *out = cnt; return 0;                    /* CNTPCT/CNTVCT + Apple M1 S3_4_C15_C10_6 timebase (MODELLED) */
     case SYSKEY(3,3,14,3,1): *out = (c->cntv_ctl & 3) | ((c->cntv_ctl & 1) && cnt >= c->cntv_cval ? 4 : 0); return 0;
     case SYSKEY(3,3,14,3,2): *out = c->cntv_cval; return 0;
     case SYSKEY(3,3,14,3,0): *out = (uint64_t)(uint32_t)(int32_t)(c->cntv_cval - cnt); return 0;
