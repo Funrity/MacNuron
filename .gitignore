@@ -5,3 +5,9 @@ build/
 local.properties
 .idea/
 .cxx/
+*.ipsw
+*.im4p
+kernelcache*
+boot_cli
+boot.log
+boot.err

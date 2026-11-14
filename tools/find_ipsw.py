@@ -11,6 +11,22 @@ def get(url, rng=None):
     rq = urllib.request.Request(url, headers={"User-Agent": "macnuron-ci"} | ({"Range": rng} if rng else {}))
     return urllib.request.urlopen(rq, timeout=60)
 
+def parse_zip64_extra(extra: bytes, usz: int, csz: int, lho: int):
+    q = 0
+    while q + 4 <= len(extra):
+        eid, esz = struct.unpack_from("<HH", extra, q)
+        v = extra[q + 4 : q + 4 + esz]
+        if eid == 1:
+            vo = 0
+            if usz == 0xFFFFFFFF and vo + 8 <= len(v):
+                usz = struct.unpack_from("<Q", v, vo)[0]; vo += 8
+            if csz == 0xFFFFFFFF and vo + 8 <= len(v):
+                csz = struct.unpack_from("<Q", v, vo)[0]; vo += 8
+            if lho == 0xFFFFFFFF and vo + 8 <= len(v):
+                lho = struct.unpack_from("<Q", v, vo)[0]; vo += 8
+        q += 4 + esz
+    return usz, csz, lho
+
 candidates = [dev]
 if dev == "VirtualMac2,1":
     candidates.append("Macmini9,1")
@@ -47,10 +63,14 @@ for x in fw:
         cd = get(url, f"bytes={cd_off}-{cd_off+cd_size-1}").read() if cd_off != 0xFFFFFFFF else b""
         p = 0
         while p + 46 <= len(cd) and cd[p:p+4] == b"PK\x01\x02":
-            csz = struct.unpack("<I", cd[p+20:p+24])[0]; nl, el, cl = struct.unpack("<HHH", cd[p+28:p+34])
+            csz, usz = struct.unpack("<II", cd[p+20:p+28])
+            nl, el, cl = struct.unpack("<HHH", cd[p+28:p+34])
+            lho = struct.unpack("<I", cd[p+42:p+46])[0]
             nm = cd[p+46:p+46+nl].decode(errors="replace")
+            extra = cd[p+46+nl:p+46+nl+el]
+            usz, csz, lho = parse_zip64_extra(extra, usz, csz, lho)
             if "kernelcache.release.vma2" in nm or "kernelcache.release.j274" in nm or nm.startswith("kernelcache.release"):
-                print(f"{x['version']} {x['buildid']}: {nm} compressed {csz}", file=sys.stderr)
+                print(f"{x['version']} {x['buildid']}: {nm} compressed {csz} (uncompressed {usz})", file=sys.stderr)
                 if want == 0 or csz == want:
                     print(url); sys.exit(0)
             p += 46 + nl + el + cl
