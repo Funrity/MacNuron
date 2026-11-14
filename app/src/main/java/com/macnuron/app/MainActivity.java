@@ -1,4 +1,4 @@
-package com.xnuron.app;
+package com.macnuron.app;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -85,7 +85,7 @@ public class MainActivity extends Activity {
         LinearLayout head = new LinearLayout(this);
         head.setGravity(Gravity.CENTER_VERTICAL);
         TextView title = t.text(this, 36f, t.onSurface, true);
-        title.setText("XNUron");
+        title.setText("MacNuron");
         head.addView(title, new LinearLayout.LayoutParams(0, -2, 1f));
         ImageView gear = new ImageView(this);
         gear.setImageResource(R.drawable.ic_settings);
@@ -304,7 +304,7 @@ public class MainActivity extends Activity {
         if (all.isEmpty()) { Toast.makeText(this, "Лог пуст", Toast.LENGTH_SHORT).show(); return; }
         try {
             ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-            cm.setPrimaryClip(ClipData.newPlainText("XNUron " + currentLogName() + " log", all));
+            cm.setPrimaryClip(ClipData.newPlainText("MacNuron " + currentLogName() + " log", all));
         } catch (RuntimeException e) {
             Toast.makeText(this, "Не удалось скопировать (слишком большой лог?): " + e.getMessage() + ". Используй Save.", Toast.LENGTH_LONG).show();
         }
@@ -319,7 +319,7 @@ public class MainActivity extends Activity {
         Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
         i.setType("text/plain");
-        i.putExtra(Intent.EXTRA_TITLE, "xnuron-" + currentLogName() + "-log.txt");
+        i.putExtra(Intent.EXTRA_TITLE, "macnuron-" + currentLogName() + "-log.txt");
         try { startActivityForResult(i, REQ_SAVE); }
         catch (RuntimeException e) { pendingSaveText = null; Toast.makeText(this, "Не удалось открыть диалог сохранения: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
     }
@@ -336,11 +336,12 @@ public class MainActivity extends Activity {
 
     private void setDiag(String s) { diagText = s; emuText.setLength(0); refreshEmuView(); }
 
-    /** Which native source the current selection means (-1 none, 3 Mach-O, 4 raw, 5 IPSW attempt). */
+    /** Which native source the current selection means (-1 none, 3 Mach-O, 4 raw, 5 IPSW / kernelcache attempt). */
     private int effectiveSource() {
         if (chosen == null) return -1;
         if ((chosenFlags & Native.FLAG_RUNNABLE_USER) != 0) return 3;
-        if (chosenFlags >> 2 == 5) return 5;
+        int kind = chosenFlags >> 2;
+        if (kind == 5 || kind == 2 || kind == 3 || kind == 6 || (kind == 1 && (chosenFlags & Native.FLAG_RUNNABLE_USER) == 0)) return 5;
         return 4;
     }
 
@@ -562,7 +563,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    // ---- settings sheet: theme (system / light / dark) and colours (XNUron / dynamic / classic)
+    // ---- settings sheet: theme (system / light / dark) and colours (Liquid Glass / dynamic / classic)
     private void showSettings() {
         Dialog dlg = new Dialog(this);
         dlg.requestWindowFeature(Window.FEATURE_NO_TITLE);
@@ -587,12 +588,12 @@ public class MainActivity extends Activity {
         }));
 
         box.addView(label("Screen resolution"));
-        box.addView(choices(new String[] { "270\u00d7480", "540\u00d7960", "1080\u00d71920" }, Ui.resolution(this), i -> {
+        box.addView(choices(new String[] { "640\u00d7400", "960\u00d7600", "1280\u00d7800" }, Ui.resolution(this), i -> {
             Ui.save(this, "res", i);
             dlg.dismiss();
         }));
         TextView resNote = t.text(this, 12f, t.onSurfaceVariant, false);
-        resNote.setText("Size of the framebuffer handed to the guest in boot_args (MODELLED; a real iPhone XS panel is 1125\u00d72436). Applies to the next Start. Bigger = sharper but slower.");
+        resNote.setText("Landscape Mac framebuffer size handed to the guest in boot_args (MODELLED; default 960\u00d7600). Applies to the next Start. Bigger = sharper but slower.");
         resNote.setPadding(t.dp(4), t.dp(8), t.dp(4), 0);
         box.addView(resNote);
 
@@ -600,14 +601,14 @@ public class MainActivity extends Activity {
         final boolean canDyn = Build.VERSION.SDK_INT >= 31;
         int curS = Ui.scheme(this);
         if (curS == 1 && !canDyn) curS = 0;
-        box.addView(choices(new String[] { "XNUron", "Dynamic", "Classic" }, curS, i -> {
+        box.addView(choices(new String[] { "Liquid Glass", "Dynamic", "Classic" }, curS, i -> {
             if (i == 1 && !canDyn) return;
             Ui.save(this, "scheme", i);
             dlg.dismiss();
             recreate();
         }));
         TextView note = t.text(this, 12f, t.onSurfaceVariant, false);
-        note.setText("XNUron: the red and white brand theme. Dynamic: colours from your wallpaper (Material You, Android 12+" + (canDyn ? "" : "; not available on this phone") + "). Classic: plain black and white, no colour.");
+        note.setText("Liquid Glass: macOS Blue accent (#0A84FF / #007AFF) with translucent glass containers. Dynamic: colours from your wallpaper (Material You, Android 12+" + (canDyn ? "" : "; not available on this phone") + "). Classic: plain black and white, no colour.");
         note.setPadding(t.dp(4), t.dp(8), t.dp(4), 0);
         box.addView(note);
 

@@ -34,6 +34,10 @@ int main(int argc, char **argv) {
     one(d, "ok_lzfse.zip", "fault", ok, ok_not, dump);
     one(d, "ok_lzss_stored.zip", "fault", ok, ok_not, dump);
     one(d, "ok_plain.zip", "fault", ok, ok_not, dump);
+    const char *ok_vma2[] = { "kernelcache.release.vma2", "DeviceTree.vma2macos.im4p", "test-kernel: started at EL1", "FAKE-DEVICETREE-BLOB", NULL };
+    one(d, "ok_vma2.zip", "fault", ok_vma2, ok_not, dump);
+    const char *ok_sa[] = { "standalone kernelcache file", "generated synthetic Apple DeviceTree in memory", "test-kernel: started at EL1", NULL };
+    one(d, "standalone_kern.im4p", "fault", ok_sa, ok_not, dump);
     const char *enc[] = { "encrypted (KBAG", "ATTEMPT ENDED BEFORE ANY GUEST INSTRUCTION RAN", NULL };
     const char *enc_not[] = { "step 6", "step 7", NULL };
     one(d, "encrypted.zip", "fault", enc, enc_not, dump);
@@ -441,6 +445,19 @@ int main(int argc, char **argv) {
         CHECK(a64m_cpu(m)->x[1] == 5, "CNTP_CTL read 0x%llx (want enable|istatus)", (unsigned long long)a64m_cpu(m)->x[1]);
         CHECK(a64m_cpu(m)->x[3] == 0x78, "CNTP_CVAL read 0x%llx", (unsigned long long)a64m_cpu(m)->x[3]);
         a64m_destroy(m);
+    }
+    { /* synthetic Apple DeviceTree generator (/chosen, /cpus/cpu0, /arm-io with uart0, aic, pmgr, wdt) */
+        uint8_t sdt[4096];
+        size_t slen = a64_dt_make_synthetic(sdt, sizeof sdt);
+        CHECK(slen > 200 && a64_dt_fixup(sdt, slen, NULL) == 0, "synthetic DeviceTree is well-formed (%zu bytes)", slen);
+        uint32_t breg = 99; char clg[400];
+        CHECK(a64_dt_boot_cpu(sdt, slen, &breg, clg, sizeof clg) == 1 && breg == 0, "synthetic DeviceTree has /cpus/cpu0 reg=0");
+        uint64_t upa[3] = {0}, usz[3] = {0};
+        CHECK(a64_dt_uarts(sdt, slen, upa, usz, clg, sizeof clg) == 1 && upa[0] == 0x235200000ull, "synthetic DeviceTree has /arm-io/uart0 at 0x235200000");
+        A64SocNode sn[8];
+        int nsn = a64_dt_soc_nodes(sdt, slen, sn, 8);
+        CHECK(nsn == 4, "synthetic DeviceTree has 4 /arm-io SoC nodes (uart0, aic, pmgr, wdt): got %d", nsn);
+        CHECK(a64_dt_patch_u64x2(sdt, slen, "RAMDisk", 0x804000000ull, 0x100000ull) == 1, "synthetic DeviceTree has /chosen/memory-map/RAMDisk slot");
     }
     uint8_t junk[64] = "bvx2\xff\xff\xff\xff"; o = a64_unpack_payload(junk, sizeof junk, &olen, err, sizeof err); CHECK(!o, "corrupt LZFSE accepted"); free(o);
     memcpy(junk, "complzss", 8); o = a64_unpack_payload(junk, sizeof junk, &olen, err, sizeof err); CHECK(!o, "short complzss accepted"); free(o);

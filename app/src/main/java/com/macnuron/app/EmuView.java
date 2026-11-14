@@ -1,4 +1,4 @@
-package com.xnuron.app;
+package com.macnuron.app;
 
 import android.content.Context;
 import android.graphics.Bitmap;

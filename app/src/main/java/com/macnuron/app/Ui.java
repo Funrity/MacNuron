@@ -1,4 +1,4 @@
-package com.xnuron.app;
+package com.macnuron.app;
 
 import android.app.Activity;
 import android.content.Context;
@@ -25,7 +25,7 @@ final class Ui {
         d = c.getResources().getDisplayMetrics().density;
         int mode = themeMode(c);
         night = mode == 2 || (mode == 0 && (c.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES);
-        int sch = scheme(c);   // 0 = XNUron (red/white, default), 1 = dynamic (Material You, Android 12+), 2 = classic (neutral black/white)
+        int sch = scheme(c);   // 0 = Liquid Glass (macOS Blue, default), 1 = dynamic (Material You, Android 12+), 2 = classic (neutral black/white)
         if (sch == 1 && Build.VERSION.SDK_INT >= 31) dynamic(c); else if (sch == 2) classic(); else brand();
         error = night ? 0xFFF2B8B5 : 0xFFB3261E;
         errorContainer = night ? 0xFF8C1D18 : 0xFFF9DEDC;
@@ -39,11 +39,11 @@ final class Ui {
     static int scheme(Context c) {
         try { return c.getSharedPreferences("xnuron", Context.MODE_PRIVATE).getInt("scheme", 0); } catch (RuntimeException e) { return 0; }
     }
-    /** 0.4.85: framebuffer of the IPSW attempt: 0 = 270x480, 1 = 540x960 (default), 2 = 1080x1920. Applies to the next start. */
+    /** Framebuffer of the IPSW attempt (landscape Mac): 0 = 640x400, 1 = 960x600 (default), 2 = 1280x800. Applies to the next start. */
     static int resolution(Context c) {
         try { int r = c.getSharedPreferences("xnuron", Context.MODE_PRIVATE).getInt("res", 1); return r < 0 || r > 2 ? 1 : r; } catch (RuntimeException e) { return 1; }
     }
-    static final int[][] RES = { { 270, 480 }, { 540, 960 }, { 1080, 1920 } };
+    static final int[][] RES = { { 640, 400 }, { 960, 600 }, { 1280, 800 } };
     static void save(Context c, String key, Object v) {
         try {
             android.content.SharedPreferences.Editor e = c.getSharedPreferences("xnuron", Context.MODE_PRIVATE).edit();
@@ -52,16 +52,16 @@ final class Ui {
         } catch (RuntimeException ignored) { }
     }
 
-    /** The XNUron brand scheme: red and white (dark red and near-black in the dark theme). The default. */
+    /** The MacNuron Liquid Glass scheme: deep dark-blue / icy graphite in dark mode, light icy in light mode, macOS Blue (#0A84FF / #007AFF), translucent cards with 1dp outline glass stroke. */
     private void brand() {
         if (night) {
-            primary = 0xFFFFB3AB; onPrimary = 0xFF690008; primaryContainer = 0xFF93000F; onPrimaryContainer = 0xFFFFDAD6;
-            surface = 0xFF1A1110; onSurface = 0xFFF1DFDC; onSurfaceVariant = 0xFFD8C2BF;
-            container = 0xFF271D1C; containerHigh = 0xFF322826; outline = 0xFFA08C8A;
+            primary = 0xFF0A84FF; onPrimary = 0xFFFFFFFF; primaryContainer = 0xB3162640; onPrimaryContainer = 0xFFEAF2FF;
+            surface = 0xFF0B101B; onSurface = 0xFFEAF2FF; onSurfaceVariant = 0xFFA5B8D4;
+            container = 0xA6131E32; containerHigh = 0xCC1C2B46; outline = 0x6678B4FF;
         } else {
-            primary = 0xFFB3001B; onPrimary = 0xFFFFFFFF; primaryContainer = 0xFFFFDAD6; onPrimaryContainer = 0xFF410003;
-            surface = 0xFFFFF8F7; onSurface = 0xFF231918; onSurfaceVariant = 0xFF534341;
-            container = 0xFFFCEAE8; containerHigh = 0xFFF6E0DE; outline = 0xFF857371;
+            primary = 0xFF007AFF; onPrimary = 0xFFFFFFFF; primaryContainer = 0xCCFFFFFF; onPrimaryContainer = 0xFF092040;
+            surface = 0xFFEEF4FC; onSurface = 0xFF0D1726; onSurfaceVariant = 0xFF4A5E78;
+            container = 0xB3E2EDF9; containerHigh = 0xCCD4E4F7; outline = 0x55007AFF;
         }
     }
 
@@ -115,6 +115,10 @@ final class Ui {
         GradientDrawable g = new GradientDrawable();
         g.setColor(color);
         g.setCornerRadius(radiusDp * d);
+        if (color == primaryContainer || color == container || color == containerHigh) {
+            int alpha = Color.alpha(outline) < 0xFF ? Color.alpha(outline) : (night ? 0x66 : 0x55);
+            g.setStroke(Math.max(1, dp(1)), withAlpha(outline, alpha));
+        }
         return g;
     }
 

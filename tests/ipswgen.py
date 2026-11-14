@@ -55,6 +55,15 @@ if len(sys.argv) > 5:
 mk("ok_lzfse.zip", im4p(b"krnl", lz(kern)), zipfile.ZIP_DEFLATED)
 mk("ok_lzss_stored.zip", im4p(b"krnl", complzss(kern)), zipfile.ZIP_STORED)
 mk("ok_plain.zip", kern, zipfile.ZIP_DEFLATED)                     # unwrapped Mach-O (e.g. user-decrypted)
+# UniversalMac IPSW priority test: vma2 must win over j274 and other kernelcaches/DeviceTrees even when longer or listed later
+with zipfile.ZipFile(out + "/ok_vma2.zip", "w", compression=zipfile.ZIP_DEFLATED) as z:
+    z.writestr("kernelcache.release.iphone11", b"NOT-A-KERNEL")
+    z.writestr("kernelcache.release.j274", b"ALSO-NOT-VMA2")
+    z.writestr("kernelcache.release.vma2", im4p(b"krnl", lz(kern)))
+    z.writestr("Firmware/all_flash/DeviceTree.j274ap.im4p", b"NOT-VMA2-DT")
+    z.writestr("Firmware/all_flash/DeviceTree.vma2macos.im4p", dt)
+# Standalone unpacked kernelcache (IM4P without a ZIP archive)
+open(out + "/standalone_kern.im4p", "wb").write(im4p(b"krnl", lz(kern)))
 mk("encrypted.zip", im4p(b"krnl", os.urandom(4096), kbag=True), zipfile.ZIP_DEFLATED)
 mk("arm32.zip", im4p(b"krnl", lz(struct.pack("<IIIIIIII", 0xFEEDFACE, 12, 9, 2, 0, 0, 0, 0) + b"\0" * 64)), zipfile.ZIP_DEFLATED)
 mk("garbage.zip", im4p(b"krnl", lz(os.urandom(5000))), zipfile.ZIP_DEFLATED)

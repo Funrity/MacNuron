@@ -32,11 +32,11 @@ jobs:
         run: |
           v=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
           echo "name=$v" >> "$GITHUB_OUTPUT"
-          cp app/build/outputs/apk/debug/*.apk "XNUron-$v.apk"
+          cp app/build/outputs/apk/debug/*.apk "MacNuron-$v.apk"
       - uses: actions/upload-artifact@v4
         with:
-          name: xnuron-apk-${{ steps.ver.outputs.name }}
-          path: XNUron-${{ steps.ver.outputs.name }}.apk
+          name: macnuron-apk-${{ steps.ver.outputs.name }}
+          path: MacNuron-${{ steps.ver.outputs.name }}.apk
       - name: Publish release (main only)
         if: github.ref == 'refs/heads/main'
         env:
@@ -44,6 +44,6 @@ jobs:
           V: ${{ steps.ver.outputs.name }}
         run: |
           gh release delete "v$V" --yes --cleanup-tag 2>/dev/null || true
-          gh release create "v$V" "XNUron-$V.apk" --target "$GITHUB_SHA" --prerelease \
-            --title "XNUron $V" \
-            --notes "Автоматическая сборка коммита ${GITHUB_SHA::7}. Экспериментальный эмулятор: iOS не запускается, подробности в README."
+          gh release create "v$V" "MacNuron-$V.apk" --target "$GITHUB_SHA" --prerelease \
+            --title "MacNuron $V" \
+            --notes "Автоматическая сборка коммита ${GITHUB_SHA::7}. Экспериментальный эмулятор MacNuron (macOS 11 Big Sur ARM64 kernelcache loader)."

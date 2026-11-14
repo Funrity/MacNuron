@@ -74,6 +74,52 @@ int a64_macho_parse(const uint8_t *d, size_t n, A64MachO *o) {
             break;
         case 0x22: o->has_dyld_info = true; break;                                         /* DYLD_INFO(_ONLY) */
         case 0x34: o->has_chained_fixups = true; break;                                   /* LC_DYLD_CHAINED_FIXUPS (0x80000034) */
+        case 0x35:                                                                         /* LC_FILESET_ENTRY (0x80000035) */
+            if (cs >= 32) {
+                uint64_t f_vm = rd64(c + 8), f_off = rd64(c + 16);
+                uint32_t id_off = rd32(c + 24);
+                char eid[128] = {0};
+                if (id_off >= 32 && id_off < cs) {
+                    size_t mx = cs - id_off;
+                    snprintf(eid, sizeof eid, "%.*s", (int)(mx < sizeof eid - 1 ? mx : sizeof eid - 1), (const char *)(c + id_off));
+                }
+                bool is_kern = !strcmp(eid, "com.apple.kernel") || strstr(eid, "kernel") != NULL;
+                if (f_off + 32 <= len && rd32(h + f_off) == MH_MAGIC_64) {
+                    const uint8_t *eh = h + f_off;
+                    uint32_t enc = rd32(eh + 16), esz = rd32(eh + 20);
+                    if (f_off + 32 + (uint64_t)esz <= len) {
+                        size_t eoff = 32;
+                        for (uint32_t j = 0; j < enc && eoff + 8 <= 32 + (size_t)esz; j++) {
+                            uint32_t ecmd = rd32(eh + eoff), ecs = rd32(eh + eoff + 4);
+                            if (ecs < 8 || ecs % 4 || eoff + ecs > 32 + (size_t)esz) break;
+                            const uint8_t *ec = eh + eoff;
+                            uint32_t eb = ecmd & ~LC_REQ_DYLD;
+                            if (eb == 0x05 && ecs >= 16 + 8 * 33 && rd32(ec + 8) == 6 && (is_kern || !o->has_unixthread)) {
+                                o->has_unixthread = true; o->thread_pc = rd64(ec + 16 + 8 * 32);
+                            } else if (eb == 0x28 && ecs >= 24 && (is_kern || !o->has_unixthread)) {
+                                o->has_unixthread = true; o->thread_pc = f_vm + rd64(ec + 8);
+                            } else if (eb == LC_SEGMENT_64 && ecs >= 72 && is_kern && o->nseg < A64_MACHO_MAX_SEG) {
+                                /* If the outer MH_FILESET has no segments yet, collect kernel entry segments */
+                                bool dup = false;
+                                uint64_t svm = rd64(ec + 24);
+                                for (int s_i = 0; s_i < o->nseg; s_i++) if (o->seg[s_i].vmaddr == svm) { dup = true; break; }
+                                if (!dup) {
+                                    A64Seg *s = &o->seg[o->nseg++];
+                                    memcpy(s->name, ec + 8, 16); s->name[16] = 0;
+                                    s->vmaddr = svm; s->vmsize = rd64(ec + 32); s->fileoff = rd64(ec + 40); s->filesize = rd64(ec + 48);
+                                    s->maxprot = rd32(ec + 56); s->initprot = rd32(ec + 60);
+                                    if (s->vmsize && strcmp(s->name, "__PAGEZERO")) {
+                                        if (s->vmaddr < o->lowest_vm) o->lowest_vm = s->vmaddr;
+                                        if (s->vmaddr + s->vmsize > o->highest_vm) o->highest_vm = s->vmaddr + s->vmsize;
+                                    }
+                                }
+                            }
+                            eoff += ecs;
+                        }
+                    }
+                }
+            }
+            break;
         case 0x1D: o->has_code_signature = true; break;
         case 0x2C: if (cs >= 20) { o->has_encryption = true; o->cryptid = rd32(c + 16); } break;
         case 0x32: if (cs >= 16) { o->has_build_version = true; o->platform = rd32(c + 8); o->minos = rd32(c + 12); } break;

@@ -3,11 +3,11 @@ on:
   workflow_dispatch:
     inputs:
       kernel_size:
-        description: "compressed size of kernelcache.release.iphone11 in the IPSW (bytes), from the app log"
-        default: "16875356"
+        description: "compressed size of kernelcache.release.vma2 in the IPSW (bytes), or 0 for latest macOS 11 Big Sur"
+        default: "0"
       device:
-        description: "ipsw.me device identifier"
-        default: "iPhone11,4"
+        description: "ipsw.me device identifier (VirtualMac2,1 or Macmini9,1 for UniversalMac_11.x_Restore.ipsw)"
+        default: "VirtualMac2,1"
       max_msteps:
         description: "step limit, millions"
         default: "4000"
@@ -45,11 +45,11 @@ jobs:
       - name: "IPSW report (read-only; names, sizes, KBAG presence)"
         run: python3 tools/ipsw_report.py ipsw.zip > ipsw.txt 2>&1 || true
       - uses: actions/upload-artifact@v4
-        with: { name: boot-log, path: "boot.log\nboot.err" }
+        with: { name: macnuron-boot-log, path: "boot.log\nboot.err" }
       - name: Publish the log as a release asset
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release delete boot-log --yes --cleanup-tag 2>/dev/null || true
-          gh release create boot-log boot.log boot.err ipsw.txt --target "$GITHUB_SHA" --prerelease --title "Headless boot log" \
-            --notes "Лог headless-запуска попытки загрузки (коммит ${GITHUB_SHA::7}). Не прошивка и не загрузка iOS."
+          gh release delete macnuron-boot-log --yes --cleanup-tag 2>/dev/null || true
+          gh release create macnuron-boot-log boot.log boot.err ipsw.txt --target "$GITHUB_SHA" --prerelease --title "MacNuron Headless boot log" \
+            --notes "Лог headless-запуска попытки загрузки ядра macOS (коммит ${GITHUB_SHA::7})."

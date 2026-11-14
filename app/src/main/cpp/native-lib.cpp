@@ -13,7 +13,7 @@
 #include "attempt.h"
 #include "guest_image.h"
 
-#define JNI(ret, name) extern "C" JNIEXPORT ret JNICALL Java_com_xnuron_app_Native_##name
+#define JNI(ret, name) extern "C" JNIEXPORT ret JNICALL Java_com_macnuron_app_Native_##name
 
 static void sink(void *ud, const char *b, size_t n) { static_cast<std::string *>(ud)->append(b, n); }
 
@@ -109,7 +109,7 @@ JNI(jstring, readLogKind)(JNIEnv *env, jclass, jlong h, jint kind, jintArray off
     jint no = off + (jint)n; env->SetIntArrayRegion(offset, 0, 1, &no);
     return env->NewStringUTF(s.c_str());
 }
-JNI(jstring, readLog)(JNIEnv *env, jclass c, jlong h, jintArray offset) { return Java_com_xnuron_app_Native_readLogKind(env, c, h, 0, offset); }
+JNI(jstring, readLog)(JNIEnv *env, jclass c, jlong h, jintArray offset) { return Java_com_macnuron_app_Native_readLogKind(env, c, h, 0, offset); }
 
 /* Copies the guest framebuffer into pixels[w*h] (ARGB), w x h = the video size setting (default 540x960). Returns frame counter or -1.
    0.4.51: the IPSW attempt's video is w x h; the demo machine's 270x480 display is scaled to it (nearest neighbour). 0.4.85: the size is a setting. */

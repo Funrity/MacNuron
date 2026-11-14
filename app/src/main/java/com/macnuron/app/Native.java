@@ -1,4 +1,4 @@
-package com.xnuron.app;
+package com.macnuron.app;
 
 /** JNI bridge to the C emulator core. Handles are opaque machine pointers (0 = none). */
 public final class Native {

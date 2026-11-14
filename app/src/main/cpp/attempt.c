@@ -100,7 +100,8 @@ static int zip_find(A64ReadAt rd, void *ud, uint64_t total, bool (*pick)(const c
             q += 4 + sz;
         }
         if (pick(name)) {
-            int rank = (int)strlen(name);             /* shortest matching name wins: stable, no guessing by order */
+            int prio = has(name, "vma2") ? 0 : (has(name, "j274") || has(name, "mac")) ? 1000 : 2000;
+            int rank = prio + (int)strlen(name);      /* vma2 (VirtualMac2,1) first, then j274/mac, then shortest matching name */
             if (rank < best) { best = rank; found = 0; memcpy(out->name, name, sizeof out->name); out->method = method; out->csz = csz; out->usz = usz; out->lho = lho; }
         }
         pos += 46 + nl + xl + cl; seen++;
@@ -110,7 +111,7 @@ static int zip_find(A64ReadAt rd, void *ud, uint64_t total, bool (*pick)(const c
     return found;
 }
 
-static bool pick_kernel(const char *n) { return has(n, "kernelcache") && !has(n, ".plist") && !has(n, "restore"); }
+static bool pick_kernel(const char *n) { return has(n, "kernelcache") && !has(n, ".plist") && (has(n, "vma2") || has(n, "j274") || !has(n, "restore")); }
 static bool pick_kernel_any(const char *n) { return has(n, "kernelcache") && !has(n, ".plist"); }
 /* iBoot-equivalent device-tree fix-up (a MODELLED subset, labelled as such in the log): in Apple's flattened tree a property
  * length with bit 31 set marks a placeholder that iBoot resolves before handing the tree over. The kernel's own walker does
@@ -688,7 +689,97 @@ static uint64_t g_xref[4];   /* 0.4.126 diagnostic: code addresses referencing '
 static const char *g_pick_name;
 static bool pick_exact(const char *n) { return g_pick_name && !strcmp(n, g_pick_name); }
 static bool pick_manifest(const char *n) { return !strcmp(n, "BuildManifest.plist"); }
-static bool pick_dtree(const char *n) { return has(n, "DeviceTree") && !has(n, ".plist") && !has(n, ".dmg"); }
+static bool pick_dtree(const char *n) { return has(n, "DeviceTree") && !has(n, ".plist") && !has(n, ".dmg") && (has(n, "vma2") || has(n, "j274") || has(n, "mac") || has(n, "im4p") || has(n, "DeviceTree")); }
+
+size_t a64_dt_make_synthetic(uint8_t *buf, size_t cap) {
+    if (!buf || cap < 2048) return 0;
+    memset(buf, 0, cap);
+    size_t q = 0;
+    #define S_NODE(np_, nc_) do { uint32_t np_v = (np_), nc_v = (nc_); if (q + 8 > cap) return 0; memcpy(buf + q, &np_v, 4); memcpy(buf + q + 4, &nc_v, 4); q += 8; } while (0)
+    #define S_PROP(nm_, len_, ptr_) do { uint32_t l_v = (len_); size_t adv_ = 36 + (((size_t)l_v + 3) & ~(size_t)3); if (q + adv_ > cap) return 0; strncpy((char *)(buf + q), (nm_), 32); memcpy(buf + q + 32, &l_v, 4); if (ptr_ && l_v) memcpy(buf + q + 36, (ptr_), l_v); q += adv_; } while (0)
+    uint32_t u0 = 0, u1 = 1, u2 = 2, f24_32 = 24000000u;
+    uint64_t f24_64 = 24000000ull;
+    uint64_t ranges[3] = { 0ull, 0x200000000ull, 0x80000000ull };
+    uint32_t clks[16]; for (int i = 0; i < 16; i++) clks[i] = 24000000u;
+    uint64_t reg_uart[2] = { 0x35200000ull, 0x4000ull };
+    uint64_t reg_aic[2]  = { 0x3b100000ull, 0x8000ull };
+    uint64_t reg_pmgr[2] = { 0x3b000000ull, 0x100000ull };
+    uint64_t reg_wdt[2]  = { 0x3d2b0000ull, 0x4000ull };
+
+    /* Root: / (device-tree) */
+    S_NODE(5, 3);
+    S_PROP("name", 12, "device-tree");
+    S_PROP("model", 14, "VirtualMac2,1");
+    S_PROP("compatible", 18, "VirtualMac2,1\0Mac");
+    S_PROP("#address-cells", 4, &u2);
+    S_PROP("#size-cells", 4, &u2);
+
+    /* Child 1: /chosen */
+    S_NODE(5, 1);
+    S_PROP("name", 7, "chosen");
+    S_PROP("random-seed", 64, NULL);
+    S_PROP("entropy-data", 64, NULL);
+    S_PROP("security-domain", 4, &u1);
+    S_PROP("chip-epoch", 4, &u0);
+    /* /chosen/memory-map */
+    S_NODE(2, 0);
+    S_PROP("name", 11, "memory-map");
+    S_PROP("RAMDisk", 16, NULL);
+
+    /* Child 2: /cpus */
+    S_NODE(3, 1);
+    S_PROP("name", 5, "cpus");
+    S_PROP("#address-cells", 4, &u1);
+    S_PROP("#size-cells", 4, &u0);
+    /* /cpus/cpu0 */
+    S_NODE(6, 0);
+    S_PROP("name", 5, "cpu0");
+    S_PROP("reg", 4, &u0);
+    S_PROP("cpu-id", 4, &u0);
+    S_PROP("state", 8, "running");
+    S_PROP("timebase-frequency", 4, &f24_32);
+    S_PROP("fixed-frequency", 8, &f24_64);
+
+    /* Child 3: /arm-io */
+    S_NODE(6, 4);
+    S_PROP("name", 7, "arm-io");
+    S_PROP("#address-cells", 4, &u2);
+    S_PROP("#size-cells", 4, &u2);
+    S_PROP("compatible", 25, "arm-io,vma2\0arm-io,s8000");
+    S_PROP("ranges", 24, ranges);
+    S_PROP("clock-frequencies", sizeof clks, clks);
+
+    /* /arm-io/uart0 */
+    S_NODE(3, 0);
+    S_PROP("name", 6, "uart0");
+    S_PROP("compatible", 15, "uart-1,samsung");
+    S_PROP("reg", 16, reg_uart);
+
+    /* /arm-io/aic */
+    S_NODE(4, 0);
+    S_PROP("name", 4, "aic");
+    S_PROP("compatible", 6, "aic,1");
+    S_PROP("reg", 16, reg_aic);
+    S_PROP("ipid-mask", 64, NULL);
+
+    /* /arm-io/pmgr */
+    S_NODE(5, 0);
+    S_PROP("name", 5, "pmgr");
+    S_PROP("compatible", 23, "pmgr1,vma2\0pmgr1,t8020");
+    S_PROP("reg", 16, reg_pmgr);
+    S_PROP("#bridges", 4, &u0);
+    S_PROP("optional-bridge-mask", 4, &u0);
+
+    /* /arm-io/wdt */
+    S_NODE(3, 0);
+    S_PROP("name", 4, "wdt");
+    S_PROP("compatible", 19, "wdt,vma2\0wdt,s8000");
+    S_PROP("reg", 16, reg_wdt);
+
+    #undef S_NODE
+    #undef S_PROP
+    return q;
+}
 
 static uint8_t *zip_extract(A64ReadAt rd, void *ud, const ZEnt *z, char *why, size_t wc) {
     uint8_t lh[30];
@@ -754,13 +845,26 @@ A64Machine *a64_attempt_ipsw(A64ReadAt rd, void *ud, uint64_t total) {
     A64Machine *m = log_only;
     LOG("[boot] === EXPERIMENTAL IPSW BOOT ATTEMPT ===\n[boot] This tries each step for real and shows the real result. It is expected to fail early. It is NOT iOS booting.\n");
     ZEnt ke;
-    if (zip_find(rd, ud, total, pick_kernel, 0, &ke, why, sizeof why) < 0 && zip_find(rd, ud, total, pick_kernel_any, 0, &ke, why, sizeof why) < 0)
+    bool is_zip = true;
+    uint8_t *raw = NULL;
+    uint64_t raw_sz = 0;
+    if (zip_find(rd, ud, total, pick_kernel, 0, &ke, why, sizeof why) == 0 || zip_find(rd, ud, total, pick_kernel_any, 0, &ke, why, sizeof why) == 0) {
+        LOG("[boot] step 1: kernelcache member '%s' (%llu -> %llu bytes, %s)\n", ke.name, (unsigned long long)ke.csz, (unsigned long long)ke.usz, ke.method == 8 ? "deflate" : "stored");
+        raw = zip_extract(rd, ud, &ke, why, sizeof why);
+        if (!raw) return dead(why, "step 2 (extract)", m);
+        raw_sz = ke.usz;
+        LOG("[boot] step 2: extracted %llu bytes\n", (unsigned long long)raw_sz);
+    } else if (strstr(why, "not a ZIP") != NULL && total > 0 && total <= MAX_KERNEL) {
+        is_zip = false;
+        raw_sz = total;
+        raw = malloc((size_t)raw_sz);
+        if (!raw || rd(ud, 0, raw, (size_t)raw_sz)) { free(raw); return dead("cannot read standalone kernelcache file", "step 1 (read standalone kernelcache)", m); }
+        LOG("[boot] step 1: standalone kernelcache file (%llu bytes, no IPSW/ZIP archive)\n", (unsigned long long)raw_sz);
+        LOG("[boot] step 2: loaded %llu bytes directly\n", (unsigned long long)raw_sz);
+    } else {
         return dead(why, "step 1 (find kernelcache in the archive)", m);
-    LOG("[boot] step 1: kernelcache member '%s' (%llu -> %llu bytes, %s)\n", ke.name, (unsigned long long)ke.csz, (unsigned long long)ke.usz, ke.method == 8 ? "deflate" : "stored");
-    uint8_t *raw = zip_extract(rd, ud, &ke, why, sizeof why);
-    if (!raw) return dead(why, "step 2 (extract)", m);
-    LOG("[boot] step 2: extracted %llu bytes\n", (unsigned long long)ke.usz);
-    size_t klen = 0; uint8_t *kern = to_plain(m, raw, (size_t)ke.usz, "kernelcache", &klen, &stop);
+    }
+    size_t klen = 0; uint8_t *kern = to_plain(m, raw, (size_t)raw_sz, "kernelcache", &klen, &stop);
     free(raw);
     if (!kern) return dead(stop, "step 3 (unwrap/decompress)", m);
     if (klen >= 4 && !memcmp(kern, "\xCE\xFA\xED\xFE", 4) ) { free(kern); return dead("this is a 32-bit ARM (AArch32) Mach-O kernel. XNUron emulates AArch64 only: 32-bit ARM code cannot be executed by it at all, so there is nothing to attempt.", "step 4 (check CPU architecture)", m); }
@@ -780,22 +884,29 @@ A64Machine *a64_attempt_ipsw(A64ReadAt rd, void *ud, uint64_t total) {
     uint64_t ram = (kbase_off + span + (64u << 20) + 0xFFFFu) & ~0xFFFFull;
     if (mo.lowest_vm == ~0ull || mo.highest_vm <= mo.lowest_vm || ram > MAX_RAM) { free(kern); return dead("kernel memory layout is unusable or larger than the 768 MiB guest RAM limit", "step 5", m); }
 
-    /* optional DeviceTree */
+    /* optional DeviceTree (from IPSW archive, or synthetic Apple DeviceTree when booting a standalone kernelcache / archive without DeviceTree) */
     uint8_t *dt = NULL; size_t dtlen = 0; ZEnt de;
-    if (zip_find(rd, ud, total, pick_dtree, 0, &de, why, sizeof why) == 0) {
+    if (is_zip && zip_find(rd, ud, total, pick_dtree, 0, &de, why, sizeof why) == 0) {
         uint8_t *dr = zip_extract(rd, ud, &de, why, sizeof why);
         if (dr) {
             const char *s2 = NULL; dt = to_plain(m, dr, (size_t)de.usz, "DeviceTree", &dtlen, &s2); free(dr);
-            if (!dt) LOG("[boot] step 5: DeviceTree '%s' unusable: %s. Continuing without it.\n", de.name, s2);
+            if (!dt) LOG("[boot] step 5: DeviceTree '%s' unusable: %s.\n", de.name, s2);
             else LOG("[boot] step 5: DeviceTree '%s' %zu bytes\n", de.name, dtlen);
-        } else LOG("[boot] step 5: DeviceTree '%s' could not be extracted: %s. Continuing without it.\n", de.name, why);
-    } else LOG("[boot] step 5: no DeviceTree member found. Continuing without it.\n");
+        } else LOG("[boot] step 5: DeviceTree '%s' could not be extracted: %s.\n", de.name, why);
+    }
+    if (!dt) {
+        dt = malloc(8192);
+        if (dt) {
+            dtlen = a64_dt_make_synthetic(dt, 8192);
+            LOG("[boot] step 5: generated synthetic Apple DeviceTree in memory (%zu bytes: /chosen, /cpus/cpu0, /arm-io with uart0, aic, pmgr, wdt) [MODELLED]\n", dtlen);
+        }
+    }
     if (dt && dtlen > 0x300000) { free(dt); dt = NULL; LOG("[boot] DeviceTree larger than 3 MiB, ignored\n"); }
     /* 0.4.122 (MODELLED, iBoot does this): the kernel waits for a root device (IOMedia Apple_HFS, log 0.4.118) and the IPSW holds no firmware for the ANS
        storage coprocessor, so the way a restore boot gets a root disk is used: the Restore RAM disk named by BuildManifest.plist is loaded into memory and
        handed over in /chosen/memory-map 'RAMDisk' with boot-arg rd=md0. Its IM4P has no KBAG (not encrypted); nothing is decrypted or bypassed. */
     uint8_t *rdk = NULL; size_t rdlen = 0; uint64_t rdpa = 0; int rd_on = 0;
-    if (dt) {
+    if (dt && is_zip) {
         ZEnt me2; char rname[160] = "";
         if (zip_find(rd, ud, total, pick_manifest, 0, &me2, why, sizeof why) == 0 && me2.usz < (32u << 20)) {
             uint8_t *mf = zip_extract(rd, ud, &me2, why, sizeof why);

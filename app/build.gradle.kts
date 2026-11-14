@@ -1,10 +1,10 @@
 plugins { id("com.android.application") }
 
 android {
-    namespace = "com.xnuron.app"
+    namespace = "com.macnuron.app"
     compileSdk = 34
     defaultConfig {
-        applicationId = "com.xnuron.app"
+        applicationId = "com.macnuron.app"
         minSdk = 24
         targetSdk = 34
         versionCode = 364

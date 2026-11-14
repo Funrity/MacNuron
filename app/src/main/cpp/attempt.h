@@ -50,6 +50,8 @@ int a64_dt_node_info(uint8_t *d, size_t n, const char *node, const char *prop, i
 int a64_dt_soc_nodes(uint8_t *d, size_t n, A64SocNode *out, int max);   /* every /arm-io node with a reg: name, compatible, physical range */
 int a64_dt_uarts(uint8_t *d, size_t n, uint64_t *pa, uint64_t *sz, char *log, size_t logcap);   /* UART nodes under /arm-io: physical addresses; -1 malformed */
 int a64_dt_entropy(uint8_t *d, size_t n, int (*rng)(void *, size_t), size_t *bytes, char *log, size_t logcap);
+/* Generates a minimal synthetic Apple flattened DeviceTree in memory (/chosen, /cpus/cpu0, /arm-io with uart0, aic, pmgr, wdt). Returns byte size (0 if cap too small). */
+size_t a64_dt_make_synthetic(uint8_t *buf, size_t cap);
 
 #ifdef __cplusplus
 }

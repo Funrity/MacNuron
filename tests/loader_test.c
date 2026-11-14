@@ -118,6 +118,41 @@ int main(int argc, char **argv) {
     a64_inspect_buffer(raw, sizeof raw, &res, rep, sizeof rep);
     CHECK(res.kind == A64_KIND_RAW_A64 && strstr(rep, "nothing is known"), "unknown file is described honestly");
 
+    /* ---- MH_FILESET (0xC) with LC_FILESET_ENTRY (0x80000035) for com.apple.kernel */
+    {
+        uint8_t fs[1024]; memset(fs, 0, sizeof fs);
+        /* Outer MH_FILESET header at 0: 1 load command (LC_FILESET_ENTRY, 52 bytes) */
+        uint32_t *h0 = (uint32_t *)fs;
+        h0[0] = 0xFEEDFACFu; h0[1] = 0x0100000Cu; h0[2] = 0; h0[3] = 0xCu; /* MH_FILESET */
+        h0[4] = 1; h0[5] = 52; h0[6] = 0; h0[7] = 0;
+        /* LC_FILESET_ENTRY at +32: cmd=0x80000035, cmdsize=52, vmaddr=0xfffffe0007004000, fileoff=256, entry_id=32 */
+        uint32_t *lc = (uint32_t *)(fs + 32);
+        lc[0] = 0x80000035u; lc[1] = 52;
+        uint64_t fvm = 0xfffffe0007004000ull, foff = 256ull;
+        memcpy(fs + 32 + 8, &fvm, 8); memcpy(fs + 32 + 16, &foff, 8);
+        lc[6] = 32; lc[7] = 0;
+        memcpy(fs + 32 + 32, "com.apple.kernel", 17);
+        /* Embedded MH_EXECUTE header for com.apple.kernel at +256: 2 load commands (LC_SEGMENT_64 72B + LC_UNIXTHREAD 280B = 352B) */
+        uint32_t *eh = (uint32_t *)(fs + 256);
+        eh[0] = 0xFEEDFACFu; eh[1] = 0x0100000Cu; eh[2] = 0; eh[3] = 2;
+        eh[4] = 2; eh[5] = 72 + 280; eh[6] = 0; eh[7] = 0;
+        /* LC_SEGMENT_64 at +288 */
+        uint32_t *eseg = (uint32_t *)(fs + 288);
+        eseg[0] = 0x19u; eseg[1] = 72; memcpy(fs + 288 + 8, "__TEXT", 6);
+        uint64_t svm = 0xfffffe0007004000ull, svmsz = 0x100000ull, sfoff = 0, sfsz = 512;
+        memcpy(fs + 288 + 24, &svm, 8); memcpy(fs + 288 + 32, &svmsz, 8);
+        memcpy(fs + 288 + 40, &sfoff, 8); memcpy(fs + 288 + 48, &sfsz, 8);
+        /* LC_UNIXTHREAD at +360 */
+        uint32_t *eth = (uint32_t *)(fs + 360);
+        eth[0] = 0x05u; eth[1] = 280; eth[2] = 6; eth[3] = 68;
+        uint64_t epc = 0xfffffe0007008120ull;
+        memcpy(fs + 360 + 16 + 8 * 32, &epc, 8);
+
+        A64MachO mo;
+        CHECK(a64_macho_parse(fs, sizeof fs, &mo) == 0 && mo.filetype == 0xCu && mo.has_unixthread && mo.thread_pc == epc && mo.nseg == 1,
+              "MH_FILESET (0xC) with LC_FILESET_ENTRY (0x80000035) extracts kernel entry point and segment");
+    }
+
     printf(fails ? "\n%d FAILED\n" : "\nALL PASSED\n", fails);
     return fails != 0;
 }
