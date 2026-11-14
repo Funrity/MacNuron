@@ -489,6 +489,7 @@ int a64m_load_raw(A64Machine *m, const uint8_t *data, size_t len, uint64_t addr)
 #define IMPL_MAX 96
 static const struct { unsigned key; uint64_t force_bits; const char *why; } IMPL_READY[] = {
     { (3u << 14) | (4u << 11) | (15u << 7) | (0u << 3) | 4u, 0x2, "kernel polls bit 1 right before enabling the MMU; assumed 'ready'" },
+    { (3u << 14) | (6u << 11) | (15u << 7) | (12u << 3) | 4u, 0x1, "macOS 11 M1 kernel polls bit 0 right before S3_4_C15_C0_4 and MMU enable; assumed 'ready'" },
 };
 static uint64_t impl_reg(void *u, unsigned k, bool wr, uint64_t v) {
     A64Machine *m = u; int idx = -1;

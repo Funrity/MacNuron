@@ -561,6 +561,8 @@ static int sysreg_read(A64 *c, unsigned k, uint64_t *out) {
     case SYSKEY(3,3,0,0,7): *out = (c->mode == A64_MODE_SYSTEM) ? 0x4 : 0x10; return 0;   /* DCZID_EL0: system mode (MODELLED) 64-byte ZVA block allowed - the iOS kernel's bzero uses DC ZVA; user mode: prohibited */
     case SYSKEY(3,1,0,0,0): *out = 0; return 0;                        /* CCSIDR_EL1 (no cache model) */
     case SYSKEY(3,1,0,0,1): *out = 0; return 0;                        /* CLIDR_EL1 (no caches) */
+    case SYSKEY(3,1,0,0,2): *out = 0; return 0;                        /* CCSIDR2_EL1 */
+    case SYSKEY(3,1,0,0,7): *out = 0; return 0;                        /* AIDR_EL1 */
     case SYSKEY(3,2,0,0,0): *out = c->csselr_el1; return 0;
     case SYSKEY(3,0,1,0,1): *out = c->actlr_el1; return 0;
     case SYSKEY(3,0,10,3,0): *out = c->amair_el1; return 0;
@@ -723,6 +725,20 @@ static int exec_ldst(A64 *c, uint32_t i, uint64_t *next) {
         TRY(ld(c, addr, 3, &v));
         W(c, rt, v, false);
         if (i & 0x800u) W(c, rn, addr, true);
+        return 0;
+    }
+    if ((i & 0x3F200C00u) == 0x19000000u) {          /* ARMv8.4 LRCPC2: STLUR / LDAPUR (unscaled immediate) */
+        int sz = i >> 30, opc = (i >> 22) & 3;
+        if ((sz == 2 && opc == 3) || (sz == 3 && opc >= 2)) return undef(c, i);
+        uint64_t addr = R(c, rn, true) + (uint64_t)sx((i >> 12) & 0x1FF, 9);
+        if (opc == 0) {
+            TRY(st(c, addr, sz, R(c, rt, false)));
+        } else {
+            uint64_t v; TRY(ld(c, addr, sz, &v));
+            if (opc == 2) v = (uint64_t)sx(v, 8 << sz);
+            else if (opc == 3) v = (uint64_t)sx(v, 8 << sz) & M32;
+            W(c, rt, v, false);
+        }
         return 0;
     }
 

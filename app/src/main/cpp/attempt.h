@@ -25,6 +25,8 @@ size_t a64_lzss_decode(const uint8_t *src, size_t srclen, uint8_t *dst, size_t d
 /* iBoot-style placeholder-flag fix-up of an Apple device tree; returns flagged property count, -1 if malformed (untouched). */
 /* MODELLED iBoot step: add a uint32 property to /chosen if missing. 1 added, 0 present, -1 malformed or no room (cap = size of the buffer). */
 int a64_dt_chosen_add_u32(uint8_t *d, size_t *n, size_t cap, const char *name, uint32_t val);
+/* MODELLED iBoot step: set or add a uint64 property in /chosen (overwrites if an 8-byte property exists, fills if empty, or adds). */
+int a64_dt_chosen_set_u64(uint8_t *d, size_t *n, size_t cap, const char *name, uint64_t val);
 int a64_dt_fixup(uint8_t *d, size_t n, char *first_name /* >=33 bytes or NULL */);
 
 /* Marks the first /cpus child with a 'state' property as 'running'; returns 1 (and its reg), 0 none, -1 malformed. */

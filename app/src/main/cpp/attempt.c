@@ -448,6 +448,31 @@ int a64_dt_chosen_add_u32(uint8_t *d, size_t *n, size_t cap, const char *name, u
     np++; memcpy(d + hdr, &np, 4);
     *n += 40; return 1;
 }
+int a64_dt_chosen_set_u64(uint8_t *d, size_t *n, size_t cap, const char *name, uint64_t val) {
+    size_t pos = 0, hdr = 0, ins = 0;
+    if (dt_chosen_find(d, *n, &pos, 0, &hdr, &ins) < 0 || !ins) return -1;
+    uint32_t np; memcpy(&np, d + hdr, 4);
+    size_t p = hdr + 8;
+    for (uint32_t i = 0; i < np; i++) {
+        uint32_t len; memcpy(&len, d + p + 32, 4); len &= 0x7FFFFFFFu;
+        if (!strncmp((const char *)d + p, name, 32)) {
+            if (len == 8) {
+                uint64_t cur; memcpy(&cur, d + p + 36, 8);
+                if (cur == 0) { memcpy(d + p + 36, &val, 8); return 1; }
+                return 0;
+            }
+            if (len == 0) return a64_dt_node_fill_empty_prop(d, n, cap, "chosen", name, &val, 8);
+            return 0;
+        }
+        p += 36 + (((size_t)len + 3) & ~(size_t)3);
+    }
+    if (*n + 44 > cap) return -1;
+    memmove(d + ins + 44, d + ins, *n - ins);
+    memset(d + ins, 0, 32); strncpy((char *)d + ins, name, 31);
+    uint32_t l8 = 8; memcpy(d + ins + 32, &l8, 4); memcpy(d + ins + 36, &val, 8);
+    np++; memcpy(d + hdr, &np, 4);
+    *n += 44; return 1;
+}
 /* 0.4.65: add a zero-length property `prop` to the first node called `node` (appended after its last property), if it has none. 1 added, 0 already there, -1 no room / malformed, -2 node not found. */
 typedef struct { const char *node; int found; size_t hdr, ins; } DtNodeAt;
 static int dt_nodeat_walk(uint8_t *d, size_t n, size_t *pos, int depth, DtNodeAt *na) {
@@ -715,12 +740,15 @@ size_t a64_dt_make_synthetic(uint8_t *buf, size_t cap) {
     S_PROP("#size-cells", 4, &u2);
 
     /* Child 1: /chosen */
-    S_NODE(5, 1);
+    uint64_t dram_base = A64M_IOS_RAM_BASE, dram_size = MAX_RAM;
+    S_NODE(7, 1);
     S_PROP("name", 7, "chosen");
     S_PROP("random-seed", 64, NULL);
     S_PROP("entropy-data", 64, NULL);
     S_PROP("security-domain", 4, &u1);
     S_PROP("chip-epoch", 4, &u0);
+    S_PROP("dram-base", 8, &dram_base);
+    S_PROP("dram-size", 8, &dram_size);
     /* /chosen/memory-map */
     S_NODE(2, 0);
     S_PROP("name", 11, "memory-map");
@@ -946,6 +974,9 @@ A64Machine *a64_attempt_ipsw(A64ReadAt rd, void *ud, uint64_t total) {
               dt = nd;
               int a1 = a64_dt_chosen_add_u32(dt, &dtlen, dtcap, "security-domain", 1);
               int a2 = a64_dt_chosen_add_u32(dt, &dtlen, dtcap, "chip-epoch", 0);
+              int db = a64_dt_chosen_set_u64(dt, &dtlen, dtcap, "dram-base", A64M_IOS_RAM_BASE);
+              int ds = a64_dt_chosen_set_u64(dt, &dtlen, dtcap, "dram-size", MAX_RAM);
+              if (db == 1 || ds == 1) LOG("[boot] DeviceTree fix-up (MODELLED, iBoot does this): set /chosen 'dram-base' = 0x%llx and 'dram-size' = 0x%llx (macOS 11 AppleARMPE panics if /chosen lacks 'dram-base' or 'dram-size')\n", (unsigned long long)A64M_IOS_RAM_BASE, (unsigned long long)MAX_RAM);
               if (rdk) { int ar = a64_dt_node_add_zero_prop(dt, &dtlen, dtcap, "memory-map", "RAMDisk", 16); LOG("[boot] DeviceTree fix-up (MODELLED, iBoot does this): /chosen/memory-map 'RAMDisk' %s (filled with the physical address and size once the layout is known)\n", ar == 1 ? "added" : ar == 0 ? "already present" : "NOT possible (no memory-map node?)"); }
               { /* 0.4.65/0.4.75: ApplePMGR.cpp:899 panics "voltage-statesN not found" one N per run (log 0.4.74: N=5 after N=1); every missing voltage-states0..15 becomes an empty property so the next runs do not stop on each index */
                 char vn[24], added[96] = ""; int na3 = 0, bad = 0;
