@@ -45,7 +45,7 @@ typedef struct {
 enum { A64_MODE_USER = 0, A64_MODE_SYSTEM = 1 };
 enum { A64_RUN_HALTED = 0, A64_RUN_LIMIT = 1, A64_RUN_IDLE = 2, A64_RUN_FAULT = -1 };
 
-#define A64_MAX_DEVS 400   /* 0.4.58: was 16 (8 before); every /arm-io node of the DeviceTree can become an unknown block */
+#define A64_MAX_DEVS 640   /* 0.4.58: was 16 (8 before); every /arm-io node of the DeviceTree can become an unknown block */
 #define A64_PC_HIST 48
 #define A64_TIMER_HZ 24000000ull   /* CNTFRQ_EL0; 1 executed instruction == 1 tick */
 
@@ -66,9 +66,10 @@ typedef struct {
     /* ---- system mode state ---- */
     int mode;                /* A64_MODE_* */
     int el;                  /* current exception level, 0 or 1 */
-    int spsel;               /* PSTATE.SP: 1 = use SP_EL1 at EL1 */
+    int spsel;               /* PSTATE.SP: 1 = use SP_EL1 at EL1 (or SP_GL1 when gxf_mode is set) */
+    bool gxf_mode;           /* Apple Guarded Execution Mode (GL1, entered by genter 0x00201420, exited by gexit 0x00201400) */
     unsigned daif;           /* D=8 A=4 I=2 F=1 (1 = masked) */
-    uint64_t sp_bank[2];     /* SP_EL0, SP_EL1 (the active one lives in sp) */
+    uint64_t sp_bank[3];     /* SP_EL0, SP_EL1, SP_GL1 (the active one lives in sp) */
     uint64_t elr_el1, spsr_el1, esr_el1, far_el1, vbar_el1;
     uint64_t sctlr_el1, tcr_el1, ttbr0_el1, ttbr1_el1, mair_el1, cpacr_el1;
     uint64_t tpidr_el0, tpidr_el1, tpidrro_el0, contextidr_el1;

@@ -117,7 +117,7 @@ int a64m_add_s5l_uart(A64Machine *m, uint64_t pa, uint64_t size) {
 }
 /* MODELLED placeholder for an SoC register block whose real behaviour is unknown: reads return 0, writes are ignored, and every access (first 40) is logged so the
  * stop report shows exactly what the kernel touches. This is an assumption, not hardware knowledge. */
-static struct Unk { A64Machine *m; int is_i2c, is_dart, is_spmi, is_aic; uint32_t sp_fifo[16]; unsigned sp_n, sp_irq; uint32_t sp_en[8]; uint32_t aic_pend[16], aic_mask[16]; uint16_t aw_off[128]; uint32_t aw_or[128], aw_n[128]; int aw_cnt; uint32_t i2c_st; uint64_t ts_base[16]; int ts_n; uint64_t ts_off[160], ts_val[160]; int ts_rn; unsigned n, cap; char label[44]; uint64_t pa; uint64_t rv_off[16], rv_val[16]; int rv_n; unsigned reads, writes; uint64_t last_off; int rb; uint32_t rbv[1024]; int ps_n; uint64_t ps_off[512]; uint32_t ps_val[512]; int ps; int lk_n; uint64_t lk_w[8], lk_r[8]; uint32_t lk_v[8]; int lk_set[8]; char ac[170]; } g_unk[360]; static int g_unk_n;
+static struct Unk { A64Machine *m; int is_i2c, is_dart, is_spmi, is_aic; uint32_t sp_fifo[16]; unsigned sp_n, sp_irq; uint32_t sp_en[8]; uint32_t aic_pend[16], aic_mask[16]; uint16_t aw_off[128]; uint32_t aw_or[128], aw_n[128]; int aw_cnt; uint32_t i2c_st; uint64_t ts_base[16]; int ts_n; uint64_t ts_off[160], ts_val[160]; int ts_rn; unsigned n, cap; char label[44]; uint64_t pa; uint64_t rv_off[16], rv_val[16]; int rv_n; unsigned reads, writes; uint64_t last_off; int rb; uint32_t rbv[1024]; int ps_n; uint64_t ps_off[512]; uint32_t ps_val[512]; int ps; int lk_n; uint64_t lk_w[8], lk_r[8]; uint32_t lk_v[8]; int lk_set[8]; char ac[170]; } g_unk[600]; static int g_unk_n;
 /* 0.4.234 MODELLED (ASSUMPTION, PLACEHOLDER): minimal interrupt controller for the DeviceTree node "aic" (aic,t8020, reg 0x23b100000). Register layout taken from the PUBLIC Linux (Asahi) driver of the first-generation Apple AIC, NOT verified on this chip: EVENT +0x2004 (read: lowest pending unmasked interrupt as (1<<16)|number, acknowledged; 0 = none), MASK_SET +0x4100.., MASK_CLR +0x4180.. (one bit per interrupt, 32 per word), everything starts masked. No priorities, no target CPU, no IPIs, no software interrupts. The CPU's IRQ input is the OR of pending&~mask. */
 static void aic_update(struct Unk *d) { int any = 0; for (int i = 0; i < 16; i++) if (d->aic_pend[i] & ~d->aic_mask[i]) any = 1; d->m->cpu.irq_line = any ? true : false; }
 static struct Unk *aic_of(A64Machine *m);
@@ -171,7 +171,7 @@ int a64m_aic_raise(A64Machine *m, unsigned irq) { struct Unk *a = aic_of(m); if 
 static int add_unknown(A64Machine *m, uint64_t pa, uint64_t size, const char *label, unsigned cap) {
     int slot = -1; for (int k = 0; k < g_unk_n; k++) if (g_unk[k].m == m && g_unk[k].pa == pa) slot = k;   /* a stale entry of a destroyed machine that got the same address */
     if (slot < 0) for (int k = 0; k < g_unk_n; k++) if (!g_unk[k].m) { slot = k; break; }   /* free slot of a destroyed machine */
-    if (slot < 0) { if (g_unk_n >= 360) return -1; slot = g_unk_n++; }
+    if (slot < 0) { if (g_unk_n >= 600) return -1; slot = g_unk_n++; }
     struct Unk *d = &g_unk[slot], keep = *d; memset(d, 0, sizeof *d); d->m = m; d->pa = pa; d->cap = cap; if (label) snprintf(d->label, sizeof d->label, "'%.38s'", label); d->is_i2c = label && strstr(label, "i2c") != NULL; d->is_dart = label && !strncmp(label, "dart", 4); d->is_spmi = label && !strcmp(label, "spmi"); d->is_aic = label && !strcmp(label, "aic"); if (d->is_aic) for (int z = 0; z < 16; z++) d->aic_mask[z] = 0xffffffffu;
     A64Dev dev = { pa, size, unk_r, unk_w, d, "unknown-soc" };
     if (a64_add_device(&m->cpu, &dev)) { *d = keep; return -1; }   /* 0.4.59: a refused add (overlap with the SAME block added earlier) must not wipe the live entry: this lost the 'aic' +0x4 value in 0.4.58 */
@@ -464,8 +464,8 @@ void a64m_set_pc_trace(A64Machine *m, uint64_t va) { m->cpu.tr_pc = va; m->cpu.t
 void a64m_set_call_trace(A64Machine *m, uint64_t va) { m->cpu.ctr_pc = va; m->cpu.ctr_mode = 0; }
 void a64m_set_call_trace_regs(A64Machine *m, uint64_t va) { m->cpu.ctr_pc = va; m->cpu.ctr_mode = 1; }
 void a64m_set_dt_phys(A64Machine *m, uint64_t pa) { (void)m; g_dt_phys = pa; }
-static A64SocNode g_soc[300]; static int g_soc_n;
-void a64m_set_soc_nodes(A64Machine *m, const A64SocNode *nodes, int n) { (void)m; if (n > 300) n = 300; if (n < 0) n = 0; memcpy(g_soc, nodes, (size_t)n * sizeof *nodes); g_soc_n = n; }
+static A64SocNode g_soc[600]; static int g_soc_n;
+void a64m_set_soc_nodes(A64Machine *m, const A64SocNode *nodes, int n) { (void)m; if (n > 600) n = 600; if (n < 0) n = 0; memcpy(g_soc, nodes, (size_t)n * sizeof *nodes); g_soc_n = n; }
 void a64m_set_boot_arg(A64Machine *m, uint64_t v) { m->cpu.x[0] = v; m->cpu.watch_lo = v; m->cpu.watch_hi = v + 0x400; }
 uint8_t *a64m_ram_at(A64Machine *m, uint64_t a, uint64_t len) {
     if (a < m->ram_base) return NULL;

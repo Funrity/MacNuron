@@ -1186,7 +1186,7 @@ A64Machine *a64_attempt_ipsw(A64ReadAt rd, void *ud, uint64_t total) {
             LOG("[boot] MODELLED device: Apple S5L UART at physical 0x%llx (size 0x%llx), address from the DeviceTree; transmitted bytes go to the Kernel log, nothing is ever received\n", (unsigned long long)upa[k], (unsigned long long)usz[k]);
         { /* 0.4.53: log 0.4.52: the kernel maps a device page at physical 0x23b100000 and reads its first register (ldr w0,[base,w1,uxtw] with w1 = 0); nothing is there, so the access is a synchronous external abort and the kernel panics. Ask the DeviceTree which node owns that address and model it as an unknown block. */
           char nn[40], cc[100]; uint64_t nb = 0, ns = 0; int fr = a64_dt_find_pa(dt, dtlen, 0x23b100000ull, nn, sizeof nn, cc, sizeof cc, &nb, &ns);
-          { static A64SocNode all[300]; int na = a64_dt_soc_nodes(dt, dtlen, all, 300); if (na > 0) { a64m_set_soc_nodes(m, all, na); LOG("[boot] DeviceTree: %d /arm-io nodes with a reg range are known to the stop report (it names the node that owns the first access to unmapped hardware)\n", na); } }
+          { static A64SocNode all[600]; int na = a64_dt_soc_nodes(dt, dtlen, all, 600); if (na > 0) { a64m_set_soc_nodes(m, all, na); LOG("[boot] DeviceTree: %d /arm-io nodes with a reg range are known to the stop report (it names the node that owns the first access to unmapped hardware)\n", na); } }
           int added = fr == 1 && ns && ns <= 0x1000000ull && a64m_add_unknown_mmio_named(m, nb, ns, nn) == 0;
           if (added) {
               /* 0.4.56: log 0.4.55: AppleInterruptController::start panics "device tree ipid-mask property length is 64 but should be 0" (AppleInterruptController.cpp:128). The kernel read aic +0x0 and +0x4 (twice), got 0, and derived the expected mask length 0 from it. The tree's ipid-mask is 64 bytes = 512 interrupt bits. */
@@ -1265,8 +1265,27 @@ A64Machine *a64_attempt_ipsw(A64ReadAt rd, void *ud, uint64_t total) {
           int rs = a64m_add_unknown_mmio_named(m, 0x23d180000ull, 0x4000, "spmi");
           LOG("[boot] MODELLED (0.4.227, PLACEHOLDER): unknown SoC block 'spmi' over 0x23d180000 (0x4000) for the SPMI controllers at +0x700/+0xd00: %s; reads 0, first accesses logged\n", rs == 0 ? "added" : "NOT added (overlaps another block)"); }
         { /* 0.4.58: log 0.4.57: nub-gpio passed; the next stop is a write to node 'dapf-aop' (dapf,t8020), and the DeviceTree lists 263 such /arm-io nodes, so one round trip per node would take days. Every /arm-io node that is not modelled yet becomes an unknown zero block (reads 0, writes ignored); each block logs only its first accesses and the stop report lists every touched block with its read/write counts. A driver that polls a register for a status bit will now spin instead of aborting; the report shows which block it was. */
-          static A64SocNode allb[300]; int nb2 = a64_dt_soc_nodes(dt, dtlen, allb, 300), addedn = 0, skipped = 0, ndapf = 0, npsm = 0, ntemp = 0;
+          static A64SocNode allb[600]; int nb2 = a64_dt_soc_nodes(dt, dtlen, allb, 600), addedn = 0, skipped = 0, ndapf = 0, npsm = 0, ntemp = 0;
           for (int z = 0; z < nb2; z++) { if (!allb[z].size || allb[z].size > 0x1000000ull) { skipped++; continue; } if ((!strcmp(allb[z].name, "pmgr") ? a64m_add_unknown_mmio_named(m, allb[z].pa, allb[z].size, allb[z].name) : a64m_add_unknown_mmio_auto(m, allb[z].pa, allb[z].size, allb[z].name)) == 0) {   /* 0.4.62: 'pmgr' logs its first 40 accesses */ addedn++; if (!strcmp(allb[z].name, "pmgr")) { a64m_unknown_set_psmirror(m, allb[z].pa); npsm++; } if (!strncmp(allb[z].compat, "dapf", 4)) { a64m_unknown_set_readback(m, allb[z].pa); ndapf++; } } else skipped++; }
+          { /* MODELLED (ASSUMPTION, PLACEHOLDER): /cpus/cpuN nodes carry 16-byte {base, size} MMIO properties (cpm-impl-reg, acc-impl-reg, cpu-impl-reg, coresight-reg, cpu-uttdbg-reg) outside /arm-io. On macOS 11 M1, machine_lockdown (0xfffffe0007d86378) reads/writes cpm-impl-reg +0x9008 and +0x9000 (0x210e49008 / 0x210e49000), which lies just beyond pmgr's 0x210e40000..0x210e49000 slice. Register any uncovered portion of those per-core/cluster ranges. */
+            static const char *const cprops[] = { "cpm-impl-reg", "acc-impl-reg", "cpu-impl-reg", "coresight-reg", "cpu-uttdbg-reg" };
+            int cadd = 0;
+            for (int ci = 0; ci < 16; ci++) {
+                char cn[16]; snprintf(cn, sizeof cn, "cpu%d", ci);
+                for (unsigned pi = 0; pi < sizeof cprops / sizeof cprops[0]; pi++) {
+                    char w[96]; int pl = a64_dt_node_prop_words(dt, dtlen, cn, cprops[pi], w, sizeof w);
+                    unsigned b_lo = 0, b_hi = 0, s_lo = 0, s_hi = 0;
+                    if (pl != 16 || sscanf(w, "%x %x %x %x", &b_lo, &b_hi, &s_lo, &s_hi) != 4) continue;
+                    uint64_t base = ((uint64_t)b_hi << 32) | b_lo, sz = ((uint64_t)s_hi << 32) | s_lo;
+                    if (!sz || sz > 0x200000ull) continue;
+                    char lb[40]; snprintf(lb, sizeof lb, "%s-%s", cn, cprops[pi]);
+                    for (uint64_t p = base; p < base + sz; p += 0x1000ull) {
+                        if (a64m_add_unknown_mmio_named(m, p, (base + sz) - p, lb) == 0) { cadd++; break; }
+                    }
+                }
+            }
+            if (cadd) LOG("[boot] MODELLED (ASSUMPTION, PLACEHOLDER): %d per-CPU/cluster MMIO range(s) from /cpus/cpuN (cpm-impl-reg, acc-impl-reg, cpu-impl-reg, coresight-reg, cpu-uttdbg-reg) added as unknown zero blocks\n", cadd);
+          }
           { /* 0.4.259 MODELLED (PLACEHOLDER): gap fill. Nodes that were skipped above (size 0, > 16 MiB, or overlapping another node: avd, pmp, ...) leave holes in which the guest takes an external abort (0.4.258 log: read at 0x22b800000). Every skipped node with a size is cut into 64 KiB pieces (1 MiB for nodes over 1 MiB, at most 0x40 pieces per node, 120 pieces in all); each piece becomes an unknown zero block named '<node>~' if it does not overlap an existing block (refused otherwise). Reads 0, writes ignored. */
             int gfill = 0, gnode = 0; for (int z = 0; z < nb2 && gfill < 120; z++) { if (!allb[z].size) continue; uint64_t cs = allb[z].size > 0x100000ull ? 0x100000ull : 0x10000ull, a0 = allb[z].pa & ~0x3fffull, e0 = allb[z].pa + allb[z].size; int pc = 0, got = 0; char gn[44]; snprintf(gn, sizeof gn, "%.30s~", allb[z].name);
               for (uint64_t a = a0; a < e0 && pc < 0x40 && gfill < 120; a += cs, pc++) { uint64_t sz = cs; if (a + sz > e0) sz = (e0 - a + 0x3fffull) & ~0x3fffull; if (a64m_add_unknown_mmio_named(m, a, sz, gn) == 0) { gfill++; got++; } }
@@ -1276,6 +1295,8 @@ A64Machine *a64_attempt_ipsw(A64ReadAt rd, void *ud, uint64_t total) {
             for (int z = 0; z < nb2; z++) if (!strcmp(allb[z].name, "isp")) { uint64_t ip = allb[z].pa + 0x1800000ull; int ra = a64m_unknown_set_read(m, ip, 0, 0x90000ull); if (ra) { ra = a64m_add_unknown_mmio_named(m, ip, 0x4000, "isp-version"); if (ra == 0) a64m_unknown_set_read(m, ip, 0, 0x90000ull); } LOG("[boot] MODELLED (0.4.264, PLACEHOLDER): ISP version register at physical 0x%llx reads 0x90000 (fISPVersion 9: the version-9 branch of AppleH10CamIn::start reads isp+0x1800000 and needs (reg>>16)==9; %s)\n", (unsigned long long)ip, ra == 0 ? "ok" : "block NOT available"); break; } }
           for (int z = 0; z < nb2; z++) if (!strcmp(allb[z].name, "aes") && allb[z].size >= 0x1000) { int ra = a64m_unknown_set_read(m, allb[z].pa, 0xc, 0x3f80ull);   /* 0.4.313 */
               LOG("[boot] MODELLED (0.4.313, ASSUMPTION, PLACEHOLDER): AES engine status register at physical 0x%llx+0xc reads 0x3f80 (result %d). Reason: AppleS8000AESAccelerator::_enableAES (log 0.4.311, panic 'DPA has not been seeded') polls that register until bits 0x3f80 (mode 2: 0x180) are set and asserts after a timeout; the guest seeds the DPA itself, the hardware is expected to flag it as done. The bits' meaning is INFERRED from the polling code only. This is NOT an AES implementation: no data is encrypted or decrypted and no key is used; any real AES request will still not work.\n", (unsigned long long)allb[z].pa, ra); break; }
+          for (int z = 0; z < nb2; z++) if (!strcmp(allb[z].name, "sep") && allb[z].size >= 0x9000) { int ra = a64m_unknown_set_read(m, allb[z].pa, 0x8830, 0x007f00ffull);
+              LOG("[boot] MODELLED (ASSUMPTION, PLACEHOLDER): 'sep' mailbox reply register at physical 0x%llx+0x8830 reads 0x007f00ff (result %d). Reason: macOS 11 driver init at 0xfffffe000a628150 writes a mailbox command to +0x8800 and checks that +0x8830 has low byte 0xff and bits[23:16] == 0x7f; no coprocessor protocol is implemented.\n", (unsigned long long)allb[z].pa, ra); break; }
           for (int z = 0; z < nb2; z++) if (strstr(allb[z].name, "tempsensor")) for (int q = 0; q < nb2; q++) { uint64_t bp = allb[q].pa;   /* 0.4.150: per node, register offsets from its own DT properties */
               if (strcmp(allb[q].name, "pmgr") || allb[z].pa < bp || allb[z].pa >= bp + allb[q].size) continue;
               uint64_t sb = allb[z].pa - bp; a64m_unknown_ts_window(m, bp, sb);

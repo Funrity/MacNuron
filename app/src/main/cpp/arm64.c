@@ -73,7 +73,7 @@ static uint64_t timer_wait_ticks(const A64 *c) {      /* ticks until the nearest
 
 /* ------------------------------------------------------- stack / EL state */
 
-static int sp_idx(const A64 *c) { return (c->el == 0 || !c->spsel) ? 0 : 1; }
+static int sp_idx(const A64 *c) { return (c->el == 0 || !c->spsel) ? 0 : (c->gxf_mode ? 2 : 1); }
 static void set_el_sp(A64 *c, int el, int spsel) {
     c->sp_bank[sp_idx(c)] = c->sp;
     c->el = el; c->spsel = spsel;
@@ -119,6 +119,25 @@ static int take_exc(A64 *c, int kind, uint32_t esr, uint64_t ret_pc) {
     if (c->el == 0) off = 0x400;
     else off = c->spsel ? 0x200 : 0x000;
     off += (uint64_t)kind * 0x80;
+    if (c->gxf_mode && c->on_impl_reg) {
+        uint64_t vbar_gl1 = c->on_impl_reg(c->impl_ud, (3u << 14) | (6u << 11) | (15u << 7) | (10u << 3) | 2u, false, 0);
+        if (vbar_gl1) {
+            c->on_impl_reg(c->impl_ud, (3u << 14) | (6u << 11) | (15u << 7) | (10u << 3) | 3u, true, pstate_pack(c));
+            c->on_impl_reg(c->impl_ud, (3u << 14) | (6u << 11) | (15u << 7) | (10u << 3) | 6u, true, ret_pc);
+            c->on_impl_reg(c->impl_ud, (3u << 14) | (6u << 11) | (15u << 7) | (10u << 3) | 4u, true, 0);
+            if (kind == 0) {
+                c->on_impl_reg(c->impl_ud, (3u << 14) | (6u << 11) | (15u << 7) | (10u << 3) | 5u, true, esr);
+                c->on_impl_reg(c->impl_ud, (3u << 14) | (6u << 11) | (15u << 7) | (10u << 3) | 7u, true, c->far_el1);
+            }
+            c->pan = !(c->sctlr_el1 & (1ull << 23));
+            set_el_sp(c, 1, 1);
+            c->daif = 0xF;
+            c->excl_valid = false;
+            c->pc = (vbar_gl1 & ~0x7FFull) + off;
+            c->exc_count++;
+            return 1;
+        }
+    }
     c->spsr_el1 = pstate_pack(c);
     c->pan = !(c->sctlr_el1 & (1ull << 23));         /* SCTLR_EL1.SPAN = 0: PAN is set on exception entry */
     c->elr_el1 = ret_pc;
@@ -891,6 +910,42 @@ static int exec(A64 *c, uint32_t i, uint64_t *next) {
     int rd = i & 31, rn = (i >> 5) & 31, rm = (i >> 16) & 31;
     uint64_t pc = c->pc;
 
+    if (c->stub_impl_regs && c->el == 1 && c->on_impl_reg) {
+        if ((i & 0xFFFFFFE0u) == 0x00201420u) {      /* Apple GXF genter (MODELLED) */
+            uint64_t entry = c->on_impl_reg(c->impl_ud, SYSKEY(3,6,15,8,1), false, 0);
+            if (!entry) return undef(c, i);
+            c->on_impl_reg(c->impl_ud, SYSKEY(3,6,15,10,3), true, pstate_pack(c));
+            c->on_impl_reg(c->impl_ud, SYSKEY(3,6,15,10,6), true, pc + 4);
+            c->on_impl_reg(c->impl_ud, SYSKEY(3,6,15,10,4), true, 0);
+            c->on_impl_reg(c->impl_ud, SYSKEY(3,6,15,10,5), true, 0);
+            c->on_impl_reg(c->impl_ud, SYSKEY(3,6,15,8,0), true, 1);
+            c->sp_bank[sp_idx(c)] = c->sp;
+            c->gxf_mode = true;
+            c->el = 1; c->spsel = 1;
+            c->sp = c->sp_bank[sp_idx(c)];
+            c->daif = 0xF;
+            c->excl_valid = false;
+            *next = entry;
+            return 0;
+        }
+        if (i == 0x00201400u) {                      /* Apple GXF gexit (MODELLED) */
+            uint64_t s = c->on_impl_reg(c->impl_ud, SYSKEY(3,6,15,10,3), false, 0);
+            uint64_t ret_pc = c->on_impl_reg(c->impl_ud, SYSKEY(3,6,15,10,6), false, 0);
+            c->on_impl_reg(c->impl_ud, SYSKEY(3,6,15,8,0), true, 0);
+            int el = (s >> 2) & 3; if (el > 1) el = 1;
+            c->sp_bank[sp_idx(c)] = c->sp;
+            c->gxf_mode = false;
+            c->el = el; c->spsel = el ? (int)(s & 1) : 0;
+            c->sp = c->sp_bank[sp_idx(c)];
+            c->n = (s >> 31) & 1; c->z = (s >> 30) & 1; c->c = (s >> 29) & 1; c->v = (s >> 28) & 1;
+            c->daif = (s >> 6) & 0xF;
+            c->pan = (s >> 22) & 1;
+            c->excl_valid = false;
+            *next = ret_pc;
+            return 0;
+        }
+    }
+
     switch ((i >> 25) & 15) {
 
     /* ------------------------------------------------ data processing (immediate) */
@@ -1004,7 +1059,8 @@ static int exec(A64 *c, uint32_t i, uint64_t *next) {
             if (opc == 4) {                          /* ERET / ERETAA / ERETAB */
                 if (rn != 31 || (i & 0x1F) != (op3 ? 31u : 0u)) return undef(c, i);
                 if (c->mode != A64_MODE_SYSTEM || c->el == 0) return undef(c, i);
-                uint64_t s = c->spsr_el1;
+                uint64_t s = (c->gxf_mode && c->on_impl_reg) ? c->on_impl_reg(c->impl_ud, SYSKEY(3,6,15,10,3), false, 0) : c->spsr_el1;
+                uint64_t ret_pc = (c->gxf_mode && c->on_impl_reg) ? c->on_impl_reg(c->impl_ud, SYSKEY(3,6,15,10,6), false, 0) : c->elr_el1;
                 if (s & 0x10) return fatal(c, "ERET to AArch32 is not supported", s);
                 int el = (s >> 2) & 3, m = s & 3;
                 if (el > 1 || (el == 0 && m != 0)) return fatal(c, "ERET to unsupported exception level/state", s);
@@ -1013,7 +1069,7 @@ static int exec(A64 *c, uint32_t i, uint64_t *next) {
                 c->daif = (s >> 6) & 0xF;
                 c->pan = (s >> 22) & 1;
                 c->excl_valid = false;
-                *next = c->elr_el1;
+                *next = ret_pc;
                 return 0;
             }
             if (op3 && (opc == 8 || opc == 9)) opc &= 1;     /* BRAA/BRAB/BLRAA/BLRAB (modifier in Rm): no signature check */
