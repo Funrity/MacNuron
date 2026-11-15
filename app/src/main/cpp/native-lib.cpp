@@ -105,6 +105,7 @@ JNI(jstring, readLogKind)(JNIEnv *env, jclass, jlong h, jint kind, jintArray off
     std::vector<char> b(256 * 1024);
     size_t n = a64m_log_read_kind(m, kind, (size_t)off, b.data(), b.size());
     std::string s;                                  /* keep the Java string valid: guest text is ASCII */
+    s.reserve(n);
     for (size_t k = 0; k < n; k++) s += ((unsigned char)b[k] < 0x80 || b[k] == '\n') ? b[k] : '?';
     jint no = off + (jint)n; env->SetIntArrayRegion(offset, 0, 1, &no);
     return env->NewStringUTF(s.c_str());
@@ -113,24 +114,26 @@ JNI(jstring, readLog)(JNIEnv *env, jclass c, jlong h, jintArray offset) { return
 
 /* Copies the guest framebuffer into pixels[w*h] (ARGB), w x h = the video size setting (default 540x960). Returns frame counter or -1.
    0.4.51: the IPSW attempt's video is w x h; the demo machine's 270x480 display is scaled to it (nearest neighbour). 0.4.85: the size is a setting. */
-JNI(jlong, frame)(JNIEnv *env, jclass, jlong h, jintArray pixels) {
+static jlong read_frame_jni(JNIEnv *env, jlong h, jintArray pixels, jlong last_frame, bool check_last) {
     A64Machine *m = reinterpret_cast<A64Machine *>(h);
     const int W = a64m_video_w(), H = a64m_video_h();
     if (env->GetArrayLength(pixels) < W * H) return -1;
     static std::vector<uint32_t> tmp, small;
     tmp.resize((size_t)W * H);
-    int64_t f = a64m_frame(m, tmp.data(), W, H);
+    int64_t f = check_last ? a64m_frame_if_changed(m, (int64_t)last_frame, tmp.data(), W, H) : a64m_frame(m, tmp.data(), W, H);
     if (f < 0) {
         small.resize((size_t)A64M_FB_W * A64M_FB_H);
-        f = a64m_frame(m, small.data(), A64M_FB_W, A64M_FB_H);
-        if (f >= 0)
+        f = check_last ? a64m_frame_if_changed(m, (int64_t)last_frame, small.data(), A64M_FB_W, A64M_FB_H) : a64m_frame(m, small.data(), A64M_FB_W, A64M_FB_H);
+        if (f >= 0 && !(check_last && f == (int64_t)last_frame))
             for (int y = 0; y < H; y++)
                 for (int x = 0; x < W; x++)
                     tmp[(size_t)y * W + x] = small[(size_t)((int64_t)y * A64M_FB_H / H) * A64M_FB_W + (size_t)((int64_t)x * A64M_FB_W / W)];
     }
-    if (f >= 0) env->SetIntArrayRegion(pixels, 0, W * H, reinterpret_cast<jint *>(tmp.data()));
+    if (f >= 0 && !(check_last && f == (int64_t)last_frame)) env->SetIntArrayRegion(pixels, 0, W * H, reinterpret_cast<jint *>(tmp.data()));
     return (jlong)f;
 }
+JNI(jlong, frame)(JNIEnv *env, jclass, jlong h, jintArray pixels) { return read_frame_jni(env, h, pixels, -1, false); }
+JNI(jlong, frameIfChanged)(JNIEnv *env, jclass, jlong h, jintArray pixels, jlong lastFrame) { return read_frame_jni(env, h, pixels, lastFrame, true); }
 JNI(jint, fbWidth)(JNIEnv *, jclass) { return a64m_video_w(); }
 JNI(jint, fbHeight)(JNIEnv *, jclass) { return a64m_video_h(); }
 JNI(void, setVideoSize)(JNIEnv *, jclass, jint w, jint h) { a64m_set_video_size(w, h); }

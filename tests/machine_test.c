@@ -127,6 +127,10 @@ int main(int argc, char **argv) {
         int64_t f1 = a64m_frame(vm, px, 270, 480);
         CHECK(f1 > f0 && px[5 * 270 + 7] == 0xFFFF1020u && px[0] == 0xFF000000u, "video: a drawn pixel appears (row stride honoured) and the frame counter advances");
         CHECK(a64m_frame(vm, px, 270, 480) == f1, "video: unchanged content keeps the frame counter");
+        px[0] = 0x12345678u;
+        CHECK(a64m_frame_if_changed(vm, f1, px, 270, 480) == f1 && px[0] == 0x12345678u, "video: frame_if_changed skips buffer copy when unchanged");
+        uint32_t blu = 0x00112233u; memcpy(fbm, &blu, 4);
+        CHECK(a64m_frame_if_changed(vm, f1, px, 270, 480) > f1 && px[0] == 0xFF112233u, "video: frame_if_changed updates buffer when content changes");
         a64m_destroy(vm);
         { /* 0.4.51: the IPSW attempt's framebuffer size (540x960, rowBytes 2160) */
         A64Machine *vm2 = a64m_create_system(16u << 20);

@@ -448,6 +448,27 @@ int a64_dt_chosen_add_u32(uint8_t *d, size_t *n, size_t cap, const char *name, u
     np++; memcpy(d + hdr, &np, 4);
     *n += 40; return 1;
 }
+int a64_dt_chosen_set_u32(uint8_t *d, size_t *n, size_t cap, const char *name, uint32_t val) {
+    size_t pos = 0, hdr = 0, ins = 0;
+    if (dt_chosen_find(d, *n, &pos, 0, &hdr, &ins) < 0 || !ins) return -1;
+    uint32_t np; memcpy(&np, d + hdr, 4);
+    size_t p = hdr + 8;
+    for (uint32_t i = 0; i < np; i++) {
+        uint32_t len; memcpy(&len, d + p + 32, 4); len &= 0x7FFFFFFFu;
+        if (!strncmp((const char *)d + p, name, 32)) {
+            if (len == 4) { memcpy(d + p + 36, &val, 4); return 1; }
+            if (len == 0) return a64_dt_node_fill_empty_prop(d, n, cap, "chosen", name, &val, 4);
+            return 0;
+        }
+        p += 36 + (((size_t)len + 3) & ~(size_t)3);
+    }
+    if (*n + 40 > cap) return -1;
+    memmove(d + ins + 40, d + ins, *n - ins);
+    memset(d + ins, 0, 32); strncpy((char *)d + ins, name, 31);
+    uint32_t l4 = 4; memcpy(d + ins + 32, &l4, 4); memcpy(d + ins + 36, &val, 4);
+    np++; memcpy(d + hdr, &np, 4);
+    *n += 40; return 1;
+}
 int a64_dt_chosen_set_u64(uint8_t *d, size_t *n, size_t cap, const char *name, uint64_t val) {
     size_t pos = 0, hdr = 0, ins = 0;
     if (dt_chosen_find(d, *n, &pos, 0, &hdr, &ins) < 0 || !ins) return -1;
@@ -974,8 +995,10 @@ A64Machine *a64_attempt_ipsw(A64ReadAt rd, void *ud, uint64_t total) {
               dt = nd;
               int a1 = a64_dt_chosen_add_u32(dt, &dtlen, dtcap, "security-domain", 1);
               int a2 = a64_dt_chosen_add_u32(dt, &dtlen, dtcap, "chip-epoch", 0);
+              int de = a64_dt_chosen_set_u32(dt, &dtlen, dtcap, "debug-enabled", 1);
               int db = a64_dt_chosen_set_u64(dt, &dtlen, dtcap, "dram-base", A64M_IOS_RAM_BASE);
               int ds = a64_dt_chosen_set_u64(dt, &dtlen, dtcap, "dram-size", MAX_RAM);
+              if (de == 1) LOG("[boot] DeviceTree fix-up (MODELLED, iBoot does this): added /chosen 'debug-enabled' = 1 (enables kernel debug validation and permits DART lock validation bypass)\n");
               if (db == 1 || ds == 1) LOG("[boot] DeviceTree fix-up (MODELLED, iBoot does this): set /chosen 'dram-base' = 0x%llx and 'dram-size' = 0x%llx (macOS 11 AppleARMPE panics if /chosen lacks 'dram-base' or 'dram-size')\n", (unsigned long long)A64M_IOS_RAM_BASE, (unsigned long long)MAX_RAM);
               { /* MODELLED (ASSUMPTION, PLACEHOLDER): macOS 11 kernel (0xfffffe0007d76394) reads /chosen/lock-regs/amcc and /chosen/lock-regs/amcc/amcc-ctrr-a properties that iBoot populates at boot; the IPSW DeviceTree nodes carry only name and AAPL,phandle. Providing aperture-count=0 (0 apertures) with 16 KiB page-size-shift=14 lets the kernel skip AMCC MMIO aperture checks and program the CTRR registers cleanly. */
                 uint32_t z32 = 0, pshift = 14;
@@ -1293,8 +1316,8 @@ A64Machine *a64_attempt_ipsw(A64ReadAt rd, void *ud, uint64_t total) {
           }
           { /* 0.4.259 MODELLED (PLACEHOLDER): gap fill. Nodes that were skipped above (size 0, > 16 MiB, or overlapping another node: avd, pmp, ...) leave holes in which the guest takes an external abort (0.4.258 log: read at 0x22b800000). Every skipped node with a size is cut into 64 KiB pieces (1 MiB for nodes over 1 MiB, at most 0x40 pieces per node, 300 pieces in all); if a piece overlaps a smaller block inside it, sub-split down to 16 KiB (up to 16 sub-pieces per node) so leading holes like mtrtempsensor8 (0x210000000) are still covered. */
             int gfill = 0, gnode = 0; for (int z = 0; z < nb2 && gfill < 300; z++) { if (!allb[z].size) continue; uint64_t cs = allb[z].size > 0x100000ull ? 0x100000ull : 0x10000ull, a0 = allb[z].pa & ~0x3fffull, e0 = allb[z].pa + allb[z].size; int pc = 0, got = 0, sub = 0; char gn[44]; snprintf(gn, sizeof gn, "%.30s~", allb[z].name);
-              for (uint64_t a = a0; a < e0 && pc < 0x40 && gfill < 300; a += cs, pc++) { uint64_t sz = cs; if (a + sz > e0) sz = (e0 - a + 0x3fffull) & ~0x3fffull; if (a64m_add_unknown_mmio_named(m, a, sz, gn) == 0) { gfill++; got++; }
-                else if (sub < 16) { for (uint64_t b = a; b < a + sz && sub < 16 && gfill < 300; b += 0x4000ull) { uint64_t bsz = b + 0x4000ull <= e0 ? 0x4000ull : ((e0 - b + 0x3fffull) & ~0x3fffull); if (bsz && a64m_add_unknown_mmio_named(m, b, bsz, gn) == 0) { gfill++; got++; sub++; } } } }
+              for (uint64_t a = a0; a < e0 && pc < 0x40 && gfill < 300; a += cs, pc++) { uint64_t sz = cs; if (a + sz > e0) sz = (e0 - a + 0x3fffull) & ~0x3fffull; if (a64m_add_unknown_mmio_named(m, a, sz, gn) == 0) { gfill++; got++; if (!strcmp(allb[z].name, "pmgr")) a64m_unknown_set_psmirror(m, a); }
+                else if (sub < 16) { for (uint64_t b = a; b < a + sz && sub < 16 && gfill < 300; b += 0x4000ull) { uint64_t bsz = b + 0x4000ull <= e0 ? 0x4000ull : ((e0 - b + 0x3fffull) & ~0x3fffull); if (bsz && a64m_add_unknown_mmio_named(m, b, bsz, gn) == 0) { gfill++; got++; sub++; if (!strcmp(allb[z].name, "pmgr")) a64m_unknown_set_psmirror(m, b); } } } }
               if (got) gnode++; }
             LOG("[boot] MODELLED (0.4.259, PLACEHOLDER): gap fill: %d zero-block piece(s) added from %d /arm-io node(s) that were skipped or only partly covered (pieces overlapping an existing block are refused)\n", gfill, gnode); }
           { /* 0.4.263/264 MODELLED (PLACEHOLDER): ISP version register. AppleH10CamIn::start (kernel code 0x8c51a00..) reads a word at <isp reg 0 base> + 0x1800000 when fISPVersion == 9 (+0x3000000 otherwise) and requires (word>>16) == fISPVersion, else it prints 'fISPVersion=-1' and its assert panics (0.4.259 log). 0.4.263 first guessed version 8 from a table dump and was WRONG: the 0.4.263 log shows the guest read 'isp~'@0x22b800000+0x0 = isp+0x1800000, i.e. the version-9 branch, so fISPVersion = 9. The register is inside the DT range (0x1e8d000) but what the real chip holds there is UNKNOWN: the value 9<<16 = 0x90000 is only what the kernel's check demands (other bits 0). */
@@ -1303,15 +1326,24 @@ A64Machine *a64_attempt_ipsw(A64ReadAt rd, void *ud, uint64_t total) {
               LOG("[boot] MODELLED (0.4.313, ASSUMPTION, PLACEHOLDER): AES engine status register at physical 0x%llx+0xc reads 0x3f80 (result %d). Reason: AppleS8000AESAccelerator::_enableAES (log 0.4.311, panic 'DPA has not been seeded') polls that register until bits 0x3f80 (mode 2: 0x180) are set and asserts after a timeout; the guest seeds the DPA itself, the hardware is expected to flag it as done. The bits' meaning is INFERRED from the polling code only. This is NOT an AES implementation: no data is encrypted or decrypted and no key is used; any real AES request will still not work.\n", (unsigned long long)allb[z].pa, ra); break; }
           for (int z = 0; z < nb2; z++) if (!strcmp(allb[z].name, "sep") && allb[z].size >= 0x9000) { int ra = a64m_unknown_set_read(m, allb[z].pa, 0x8830, 0x007f00ffull);
               LOG("[boot] MODELLED (ASSUMPTION, PLACEHOLDER): 'sep' mailbox reply register at physical 0x%llx+0x8830 reads 0x007f00ff (result %d). Reason: macOS 11 driver init at 0xfffffe000a628150 writes a mailbox command to +0x8800 and checks that +0x8830 has low byte 0xff and bits[23:16] == 0x7f; no coprocessor protocol is implemented.\n", (unsigned long long)allb[z].pa, ra); break; }
-          for (int z = 0; z < nb2; z++) if (strstr(allb[z].name, "tempsensor")) for (int q = 0; q < nb2; q++) { uint64_t bp = allb[q].pa;   /* 0.4.150: per node, register offsets from its own DT properties */
-              if (strcmp(allb[q].name, "pmgr") || allb[z].pa < bp || allb[z].pa >= bp + allb[q].size) continue;
-              uint64_t sb = allb[z].pa - bp; a64m_unknown_ts_window(m, bp, sb);
-              static const struct { const char *p; int kind; } tp[] = { { "sensor-offset-CTL0-set", 1 }, { "sensor-offset-CTL0-clr", 1 }, { "sensor-offset-CTL1", 1 }, { "sensor-offset-CTL2", 1 }, { "sensor-offset-status", 1 }, { "sensor-offset-readBK", 2 }, { "sensor-offset-readBK1", 2 }, { "sensor-offset-readSum", 3 }, { "sensor-offset-readCnt", 4 } };
-              for (size_t pi = 0; pi < sizeof tp / sizeof tp[0]; pi++) { char w[64]; unsigned off32 = 0; if (a64_dt_node_prop_words(dt, dtlen, allb[z].name, tp[pi].p, w, sizeof w) != 4 || sscanf(w, "%x", &off32) != 1) continue;
-                  uint64_t v = tp[pi].kind == 1 ? 1 : tp[pi].kind == 2 ? (0x80000000ull | TEMPSENSOR_RAW) : tp[pi].kind == 3 ? 4 * TEMPSENSOR_RAW : 4;
-                  a64m_unknown_ts_read(m, bp, sb + off32, v); }
-              ntemp++; break; }
-          if (ntemp) LOG("[boot] MODELLED (ASSUMPTION 0.4.150, PLACEHOLDER values): %d temperature sensor nodes (name contains 'tempsensor') lie inside 'pmgr' blocks; each answers like a running sensor at ITS OWN register offsets from the DT sensor-offset-* properties: CTL0-set/CTL0-clr/CTL1/CTL2/status read 1 (bit0 'on': the kernel's AppleT8015TempSensor timeout code prints 'sensor off' when bit0 of one of them is 0; which one is not known), readBK/readBK1 = bit31 'valid' | raw 0x%x, readSum = 4*raw, readCnt = 4. The real sensor (conversion, alarms, interrupt) is NOT modelled; raw is invented (1/64 degree units, ASSUMPTION from the kernel's conversion constant)\n", ntemp, (unsigned)TEMPSENSOR_RAW);
+          for (int z = 0; z < nb2; z++) if (strstr(allb[z].name, "tempsensor") && allb[z].size) {   /* 0.4.150: per node, register offsets from its own DT properties (u32 on iOS, u64 on M1 macOS 11; may live inside pmgr or its own/gap-fill block) */
+              for (int q = 0; q < nb2; q++) if (!strcmp(allb[q].name, "pmgr") && allb[z].pa >= allb[q].pa && allb[z].pa < allb[q].pa + allb[q].size) { a64m_unknown_ts_window(m, allb[q].pa, allb[z].pa - allb[q].pa); break; }
+              static const struct { const char *p; int kind; } tp[] = { { "sensor-offset-CTL0-set", 1 }, { "sensor-offset-CTL0-clr", 1 }, { "sensor-offset-CTL1", 1 }, { "sensor-offset-CTL1-set", 1 }, { "sensor-offset-CTL2", 1 }, { "sensor-offset-CTL2-set", 1 }, { "sensor-offset-status", 1 }, { "sensor-offset-readBK", 2 }, { "sensor-offset-readBK1", 2 }, { "sensor-offset-readSum", 3 }, { "sensor-offset-readCnt", 4 } };
+              int saw = 0, has_ctl = 0;
+              for (size_t pi = 0; pi < sizeof tp / sizeof tp[0]; pi++) { char w[64]; unsigned lo = 0, hi = 0; int pl = a64_dt_node_prop_words(dt, dtlen, allb[z].name, tp[pi].p, w, sizeof w); uint64_t off64 = 0;
+                  if (pl == 4 && sscanf(w, "%x", &lo) == 1) off64 = lo;
+                  else if (pl == 8 && sscanf(w, "%x %x", &lo, &hi) == 2) off64 = ((uint64_t)hi << 32) | lo;
+                  else continue;
+                  uint64_t pa = allb[z].pa + off64, v = tp[pi].kind == 1 ? 1 : tp[pi].kind == 2 ? (0x80000000ull | TEMPSENSOR_RAW) : tp[pi].kind == 3 ? 4 * TEMPSENSOR_RAW : 4;
+                  if (tp[pi].kind == 1) has_ctl = 1;
+                  if (a64m_unknown_ts_pa(m, pa, v) != 0 && a64m_add_unknown_mmio_auto(m, pa & ~0x3fffull, 0x4000, allb[z].name) == 0) a64m_unknown_ts_pa(m, pa, v);
+                  saw++; }
+              if (saw && !has_ctl) {   /* MODELLED (ASSUMPTION, PLACEHOLDER): nodes like mtrtempsensor17/18 lack CTL* properties, so AppleT8015TempSensor reads offset +0x0 and requires bit 0 'on' */
+                  uint64_t pa = allb[z].pa;
+                  if (a64m_unknown_ts_pa(m, pa, 1) != 0 && a64m_add_unknown_mmio_auto(m, pa & ~0x3fffull, 0x4000, allb[z].name) == 0) a64m_unknown_ts_pa(m, pa, 1);
+              }
+              if (saw) ntemp++; }
+          if (ntemp) LOG("[boot] MODELLED (ASSUMPTION 0.4.150, PLACEHOLDER values): %d temperature sensor nodes (name contains 'tempsensor') answer like running sensors at their own register offsets from DT sensor-offset-* properties (32-bit or 64-bit, including CTL1-set/CTL2-set, matched by physical address): CTL*/status read 1 (bit0 'on'), readBK/readBK1 = bit31 'valid' | raw 0x%x, readSum = 4*raw, readCnt = 4. The real sensor (conversion, alarms, interrupt) is NOT modelled; raw is invented (ASSUMPTION)\n", ntemp, (unsigned)TEMPSENSOR_RAW);
           LOG("[boot] MODELLED: %d more /arm-io DeviceTree nodes became unknown zero blocks (%d skipped: empty/huge range or overlapping one already modelled). ASSUMPTION: their real registers are UNKNOWN here; reads return 0, writes are ignored\n", addedn, skipped);
           LOG("[boot] MODELLED (ASSUMPTION 0.4.110): %d 'pmgr' blocks: a written register reads back with bits 7:4 = bits 3:0 (power state: requested -> current), unwritten read 0. Reason: ApplePMGR::waitReg32 (ApplePMGR.cpp:3241) waited for (reg & 0xf0) == 0xf0 at pmgr 0x23b000000+0x802d8 after requesting state 0xf (headless log 0.4.109). No real delay or failure of the hardware is modelled\n", npsm);
           LOG("[boot] MODELLED: 'dapf' blocks ('dapf-aop' and %d more) read back the last value written to a register (0 if none). Reason (the kernel's own code, AppleDAPF.cpp:158): it writes 0x80000001 to +0x0 and requires to read the same value back. ASSUMPTION: this is only a read-back, the real DAPF filter behaviour is NOT modelled\n", ndapf); }
@@ -1334,6 +1366,15 @@ A64Machine *a64_attempt_ipsw(A64ReadAt rd, void *ud, uint64_t total) {
     { /* 0.4.112 (MODELLED, ASSUMPTION): decoded kernel code 0x8ce4604..0x8ce46dc (0.4.111 headless dump): to enable, it sets the low nibble of pmgr 0x23b000000+0x98000 to 0xf and then ApplePMGR::waitReg32 waits for (reg & 0x10) == 0, i.e. bit 4 is a busy/pending flag that clears. A fixed read value 0x0f (low nibble 0xf, bit 4 clear) satisfies that. */
       int bad = a64m_unknown_set_read(m, 0x23b000000ull, 0x98000, 0x0f) != 0; bad += a64m_unknown_set_read(m, 0x23b000000ull, 0x98004, 0x0f) != 0;   /* 0.4.113: the same function has a second branch for +0x98004 (the only two branches it has) */
       LOG("[boot] MODELLED (ASSUMPTION 0.4.112): pmgr 0x23b000000+0x98000 and +0x98004 read 0x0f: the kernel waits for bit 4 (busy) of this register to clear after setting its low nibble to 0xf. Real timing/behaviour UNKNOWN%s\n", bad ? " (WARNING: could not be set)" : ""); }
+    { /* MODELLED (ASSUMPTION, PLACEHOLDER): AppleT8103PMGR::getTunedDVMRWeightType (0xfffffe000928a448) reads 64-bit registers +0x6a8/+0x6e0 (and +0x6b0/+0x6e8 for domain 1) from pmgr@210e20000 and scans 4-bit nibbles for weight types 0..6, asserting if none matches. Place nibbles 0..5 in +0x6a8[0..5] and 6 in +0x6e0[10] (unused slots 0xf). */
+      static const uint64_t bases[2] = { 0x210e20000ull, 0x211e20000ull };
+      for (int bi = 0; bi < 2; bi++) {
+        a64m_unknown_set_read(m, bases[bi], 0x6a8, 0x0000000000543210ull);
+        a64m_unknown_set_read(m, bases[bi], 0x6b0, 0xffffffffffffffffull);
+        a64m_unknown_set_read(m, bases[bi], 0x6e0, 0xfffff6ffffffffffull);
+        a64m_unknown_set_read(m, bases[bi], 0x6e8, 0xffffffffffffffffull);
+      }
+      LOG("[boot] MODELLED (ASSUMPTION, PLACEHOLDER): pmgr DVMR weight-type fuse regs +0x6a8/+0x6b0/+0x6e0/+0x6e8 set for weight nibbles 0..6 (real chip fuses UNKNOWN)\n"); }
     { /* 0.4.116 (MODELLED, ASSUMPTION): headless log 0.4.114: the kernel wrote 0xC5ACCE55 (CoreSight lock access key) to physical 0x210010fb0, no RAM/device. The DT 'cpuN/reg-private' = {lo, hi} (cpu0 = 0x210010000, ... 6 cores) are the per-core debug blocks. The DT gives NO size: 0x10000 was the first ASSUMPTION, 0.4.118 widened it to 0x40000 (the next write went to base+0x20fb0). Reads 0, writes ignored. */
       int nc = 0, bad = 0; char pa[400] = "";
       for (int ci = 0; ci < 16; ci++) { char cn[16], w[64]; snprintf(cn, sizeof cn, "cpu%d", ci);

@@ -41,7 +41,8 @@ import java.io.InputStream;
 public class MainActivity extends Activity {
     private static final int REQ_FILE = 1, REQ_SAVE = 2;
     private static final int MAX_LOG_CHARS = 1_100_000;    // keeps the whole native log (1 MiB) for Copy
-    private static final int VIEW_TAIL_CHARS = 150_000;    // the text views only show the end of it (a huge TextView is slow)
+    private static final int VIEW_TAIL_CHARS = 32_000;     // the text views only show the end of it (a huge TextView freezes the UI thread)
+    private static final long LOG_UI_INTERVAL_MS = 250;
     private static final long MAX_FILE_BYTES = 64L << 20;
     private static final int TAB_KERNEL = 0, TAB_EMU = 1;
 
@@ -64,7 +65,8 @@ public class MainActivity extends Activity {
     private Thread emuThread;
     private final int[] kernelOffset = new int[1], emuOffset = new int[1];
     private long lastFrame = -1;
-    private boolean autoSwitchedToDisplay;
+    private boolean autoSwitchedToDisplay, kernelDirty, emuDirty;
+    private long lastLogUiMs;
     private final StringBuilder kernelText = new StringBuilder(), emuText = new StringBuilder();
 
     private Uri chosen;
@@ -235,16 +237,33 @@ public class MainActivity extends Activity {
         content.removeAllViews();
         View v = which == TAB_KERNEL ? kernelScroll : emuScroll;
         content.addView(v, new FrameLayout.LayoutParams(-1, -1));
-        if (which == TAB_EMU) refreshEmuView();
+        if (which == TAB_EMU && !emuDirty) refreshEmuView();
+        refreshVisibleLog(true);
         for (int i = 0; i < 2; i++) {
             boolean on = i == which;
             t.style(tabButtons[i], on ? t.containerHigh : Color.TRANSPARENT, on ? t.onSurface : t.onSurfaceVariant);
         }
     }
 
+    private void refreshVisibleLog(boolean force) {
+        if (logPanel.getVisibility() != View.VISIBLE) return;
+        long now = android.os.SystemClock.uptimeMillis();
+        if (!force && now - lastLogUiMs < LOG_UI_INTERVAL_MS) return;
+        if (tab == TAB_KERNEL && kernelDirty) {
+            kernelDirty = false; lastLogUiMs = now;
+            kernelView.setText(tail(kernelText));
+            kernelScroll.post(() -> kernelScroll.fullScroll(View.FOCUS_DOWN));
+        } else if (tab == TAB_EMU && emuDirty) {
+            emuDirty = false; lastLogUiMs = now;
+            refreshEmuView();
+            emuScroll.post(() -> emuScroll.fullScroll(View.FOCUS_DOWN));
+        }
+    }
+
     private void showLogs(boolean on) {
         logPanel.setVisibility(on ? View.VISIBLE : View.GONE);
         if (on) {
+            refreshVisibleLog(true);
             if (tab == TAB_KERNEL) kernelScroll.post(() -> kernelScroll.fullScroll(View.FOCUS_DOWN));
             else emuScroll.post(() -> emuScroll.fullScroll(View.FOCUS_DOWN));
         }
@@ -415,6 +434,7 @@ public class MainActivity extends Activity {
         final int src = effectiveSource();
         kernelText.setLength(0); emuText.setLength(0); kernelOffset[0] = 0; emuOffset[0] = 0;
         kernelView.setText(""); refreshEmuView(); lastFrame = -1;
+        kernelDirty = false; emuDirty = false; lastLogUiMs = 0;
         { int[] rs = Ui.RES[Ui.resolution(this)]; Native.setVideoSize(rs[0], rs[1]); emu.resize(Native.fbWidth(), Native.fbHeight()); }   // 0.4.85: resolution setting, applies from this start
         emu.clear("No display output");
         run.setEnabled(false);
@@ -464,7 +484,7 @@ public class MainActivity extends Activity {
                 setRunning(true);
                 emuThread = new Thread(() -> {
                     while (true) {
-                        int st = Native.run(fh, 200_000);
+                        int st = Native.run(fh, 500_000);
                         if (st == Native.POWEROFF || st == Native.FAULT || st == Native.STOPPED) break;
                     }
                 }, "emulator");
@@ -486,30 +506,25 @@ public class MainActivity extends Activity {
     };
 
     private void pollOnce(long h) {
-        long f = Native.frame(h, emu.pixels());
+        long f = Native.frameIfChanged(h, emu.pixels(), lastFrame);
         if (f >= 0 && f != lastFrame) {
             lastFrame = f; emu.frameReady();
             if (f > 0 && !autoSwitchedToDisplay) { autoSwitchedToDisplay = true; }   // the guest started drawing (0 = the still-black boot framebuffer of an IPSW attempt)
         }
         // drain everything that is available: one native read returns at most 256 KiB, and after a stop the whole report arrives at once
-        boolean gotK = false, gotE = false;
         for (int guard = 0; guard < 64; guard++) {
             String k = Native.readLogKind(h, 1, kernelOffset);
             if (k.isEmpty()) break;
-            kernelText.append(k); gotK = true;
+            kernelText.append(k); kernelDirty = true;
         }
         if (kernelText.length() > MAX_LOG_CHARS) kernelText.delete(0, kernelText.length() - MAX_LOG_CHARS);
-        if (gotK) {
-            kernelView.setText(tail(kernelText));
-            if (tab == TAB_KERNEL) kernelScroll.post(() -> kernelScroll.fullScroll(View.FOCUS_DOWN));
-        }
         for (int guard = 0; guard < 64; guard++) {
             String e = Native.readLogKind(h, 2, emuOffset);
             if (e.isEmpty()) break;
-            emuText.append(e); gotE = true;
+            emuText.append(e); emuDirty = true;
         }
         if (emuText.length() > MAX_LOG_CHARS) emuText.delete(0, emuText.length() - MAX_LOG_CHARS);
-        if (gotE) { emuView.setText(tail(emuText)); if (tab == TAB_EMU) emuScroll.post(() -> emuScroll.fullScroll(View.FOCUS_DOWN)); }
+        refreshVisibleLog(false);
         String stt = stateName(Native.state(h)) + " - " + Native.steps(h) + " instructions";
         status.setText(stt); runStatus.setText(stt);
     }
@@ -518,6 +533,7 @@ public class MainActivity extends Activity {
         try { if (emuThread != null) emuThread.join(2000); } catch (InterruptedException ignored) { }
         pollOnce(h);
         if (kernelText.length() == 0 && lastFrame < 0) { selectTab(TAB_EMU); showLogs(true); }     // nothing from the kernel: show why in the normal log
+        refreshVisibleLog(true);
         status.setText(stateName(st) + (st == Native.POWEROFF ? " (exit code " + Native.exitCode(h) + ")" : "")
                 + " - " + Native.steps(h) + " instructions");
         runStatus.setText(status.getText());

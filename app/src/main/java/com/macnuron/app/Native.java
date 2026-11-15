@@ -32,6 +32,8 @@ public final class Native {
     public static native String readLog(long h, int[] offset);
     /** Fills pixels (ARGB, fbWidth*fbHeight); returns frame counter or -1 if the display is off. */
     public static native long frame(long h, int[] pixels);
+    /** Same as frame(), but avoids pixel conversion / JNI copy if the frame counter still equals lastFrame. */
+    public static native long frameIfChanged(long h, int[] pixels, long lastFrame);
     public static native int fbWidth();
     public static native int fbHeight();
     /** 0.4.85: size of the next IPSW attempt's framebuffer (clamped natively). */

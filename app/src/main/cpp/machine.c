@@ -117,7 +117,7 @@ int a64m_add_s5l_uart(A64Machine *m, uint64_t pa, uint64_t size) {
 }
 /* MODELLED placeholder for an SoC register block whose real behaviour is unknown: reads return 0, writes are ignored, and every access (first 40) is logged so the
  * stop report shows exactly what the kernel touches. This is an assumption, not hardware knowledge. */
-static struct Unk { A64Machine *m; int is_i2c, is_dart, is_spmi, is_aic, is_mem; uint32_t sp_fifo[16]; unsigned sp_n, sp_irq; uint32_t sp_en[8]; uint32_t aic_pend[16], aic_mask[16]; uint32_t mem_dsid[33]; uint16_t aw_off[128]; uint32_t aw_or[128], aw_n[128]; int aw_cnt; uint32_t i2c_st; uint64_t ts_base[16]; int ts_n; uint64_t ts_off[160], ts_val[160]; int ts_rn; unsigned n, cap; char label[44]; uint64_t pa; uint64_t rv_off[16], rv_val[16]; int rv_n; unsigned reads, writes; uint64_t last_off; int rb; uint32_t rbv[1024]; int ps_n; uint64_t ps_off[512]; uint32_t ps_val[512]; int ps; int lk_n; uint64_t lk_w[8], lk_r[8]; uint32_t lk_v[8]; int lk_set[8]; char ac[170]; } g_unk[600]; static int g_unk_n;
+static struct Unk { A64Machine *m; int is_i2c, is_dart, is_spmi, is_aic, is_mem; uint32_t sp_fifo[16]; unsigned sp_n, sp_irq; uint32_t sp_en[8]; uint32_t aic_pend[16], aic_mask[16]; uint32_t mem_dsid[33]; uint16_t aw_off[128]; uint32_t aw_or[128], aw_n[128]; int aw_cnt; uint32_t i2c_st; uint64_t ts_base[16]; int ts_n; uint64_t ts_off[256], ts_val[256]; int ts_rn; unsigned n, cap; char label[44]; uint64_t pa, size; uint64_t rv_off[16], rv_val[16]; int rv_n; unsigned reads, writes; uint64_t last_off; int rb; uint32_t rbv[1024]; int ps_n; uint64_t ps_off[512]; uint32_t ps_val[512]; int ps; int lk_n; uint64_t lk_w[8], lk_r[8]; uint32_t lk_v[8]; int lk_set[8]; char ac[170]; } g_unk[600]; static int g_unk_n;
 /* 0.4.234 MODELLED (ASSUMPTION, PLACEHOLDER): minimal interrupt controller for the DeviceTree node "aic" (aic,t8020, reg 0x23b100000). Register layout taken from the PUBLIC Linux (Asahi) driver of the first-generation Apple AIC, NOT verified on this chip: EVENT +0x2004 (read: lowest pending unmasked interrupt as (1<<16)|number, acknowledged; 0 = none), MASK_SET +0x4100.., MASK_CLR +0x4180.. (one bit per interrupt, 32 per word), everything starts masked. No priorities, no target CPU, no IPIs, no software interrupts. The CPU's IRQ input is the OR of pending&~mask. */
 static void aic_update(struct Unk *d) { int any = 0; for (int i = 0; i < 16; i++) if (d->aic_pend[i] & ~d->aic_mask[i]) any = 1; d->m->cpu.irq_line = any ? true : false; }
 static struct Unk *aic_of(A64Machine *m);
@@ -130,6 +130,12 @@ const char *a64m_tempsensor_trace(void) { static char b[2600]; size_t l = 0; b[0
 static struct { char w, lab[12]; uint64_t off, v; } g_i2r[300]; static unsigned g_i2n;
 static void i2_trace(struct Unk *d, int w, uint64_t off, uint64_t v) { if (!strstr(d->label, "avd")) return; unsigned i = g_i2n++ % 300; g_i2r[i].w = (char)(w ? 'w' : 'r'); snprintf(g_i2r[i].lab, sizeof g_i2r[i].lab, "%.10s", d->label + 1); g_i2r[i].off = off; g_i2r[i].v = v; }
 const char *a64m_i2c_trace(void) { static char b[13000]; size_t l = 0; b[0] = 0; unsigned n = g_i2n < 300 ? g_i2n : 300, st = g_i2n < 300 ? 0 : g_i2n % 300; for (unsigned k = 0; k < n && l < sizeof b - 50; k++) { unsigned i = (st + k) % 300; l += (size_t)snprintf(b + l, sizeof b - l, " %s:%c+0x%llx=0x%llx", g_i2r[i].lab, g_i2r[i].w, (unsigned long long)g_i2r[i].off, (unsigned long long)g_i2r[i].v); } return b; }
+static uint64_t spmi_ctrl_off(int is_spmi, uint64_t off, int *irq_bank) {
+    if (is_spmi == 2) { *irq_bank = 1; return off; }   /* MODELLED (ASSUMPTION, PLACEHOLDER): AppleT8101SPMIController (nub-spmi, nub-spmi1, aop-spmi1) has controller regs at +0x0 (+0x0 status bit 24 RX empty & bit 8 TX/CMD empty, +0x4 cmd, +0x8 rx fifo, +0x20.. irq en, +0x78 irq status, +0xa4 reset) */
+    if (off >= 0x700 && off < 0x800) { *irq_bank = 1; return off - 0x700; }
+    if (off >= 0xd00 && off < 0xe00) { *irq_bank = 0; return off - 0xd00; }
+    *irq_bank = 0; return UINT64_MAX;
+}
 static uint64_t unk_r(void *u, uint64_t off, unsigned sz) { (void)sz;
     struct Unk *d = u; uint64_t val = 0; int fixed = 0; d->reads++; d->last_off = off;
     for (int k = 0; k < d->rv_n; k++) if (d->rv_off[k] == off) { val = d->rv_val[k]; fixed = 1; }
@@ -137,10 +143,13 @@ static uint64_t unk_r(void *u, uint64_t off, unsigned sz) { (void)sz;
     if (!fixed && d->is_dart && off == 0) { val = 0x0e000000u; fixed = 6; }   /* 0.4.224 MODELLED (ASSUMPTION, PLACEHOLDER): DART register +0x0, bits 27:24 = page-size shift. Source: AppleT8020DART.cpp:1918 compares this 4-bit field with the configured page shift and prints actual = 1<<field; config was 0x4000 (16 KiB) so the field must be 14. Other bits of the register are UNKNOWN and read 0 */
     if (!fixed && d->is_mem && off >= 0xa000 && off <= 0xa080 && (off & 3) == 0) { val = d->mem_dsid[(off - 0xa000) >> 2]; fixed = 6; }   /* MODELLED (ASSUMPTION, PLACEHOLDER): AppleT8103Mem::setDSIDGroupQuota (0xfffffe00091dc6e8) reads mem+0xa000+dsidGroup*4, extracts bits[22:16] as pDSIDLimits_T8103[dsidGroup], and asserts it is non-zero; initialized to 0x007f0000 (max 7-bit limit). */
     if (!fixed && d->is_aic && off == 0x2004) { val = 0; for (unsigned i = 0; i < 512 && !val; i++) if ((d->aic_pend[i >> 5] & ~d->aic_mask[i >> 5]) >> (i & 31) & 1) { d->aic_pend[i >> 5] &= ~(1u << (i & 31)); val = 0x10000u | i; } aic_update(d); fixed = 8; }   /* 0.4.234 */
-    if (!fixed && d->is_spmi && off >= 0x720 && off < 0x740) { val = d->sp_en[(off - 0x720) >> 2]; fixed = 7; }   /* 0.4.240 MODELLED (ASSUMPTION): interrupt-enable words +0x720.. read back what the driver wrote. Source: the SPMI interrupt handler (0.4.239 trace) reads +0x720+4i (enable) and +0x760+4i (status) for i=0..6 and handles status&enable; it saw enable 0 for word 6 because we returned 0 */
-    if (!fixed && d->is_spmi && off == 0x778) { val = d->sp_irq; fixed = 7; }   /* 0.4.234 MODELLED (ASSUMPTION): per-interrupt status words at +0x60+4*(irq/32) of the controller; interrupt 192 (the first DeviceTree interrupt of "spmi", the one AppleSPMI waits for: object field +0x168 = 0xc0) = word 6 bit 0 = +0x78. Source: AppleSPMI polled-mode code (0x89829bc) */
-    if (!fixed && d->is_spmi && (off == 0x700 || off == 0xd00)) { val = d->sp_n ? 0 : 0x01000000u; fixed = 7; }   /* 0.4.229 MODELLED (ASSUMPTION, PLACEHOLDER): SPMI controller status +0x0 of each controller (+0x700, +0xd00 in the block): bit 24 = RX FIFO empty. Source: AppleSPMI keeps reading with bit 24 clear and gives up after 10 rounds ("spmi timeout"); bit 24 is also the failure test in its poll routine */
-    if (!fixed && d->is_spmi && (off == 0x708 || off == 0xd08)) { if (d->sp_n) { val = d->sp_fifo[0]; for (unsigned q = 1; q < d->sp_n; q++) d->sp_fifo[q - 1] = d->sp_fifo[q]; d->sp_n--; } fixed = 7; }   /* 0.4.229 MODELLED: +0x8 = response FIFO pop; the response of every command is the command word echoed (ASSUMPTION: real response framing UNKNOWN; no PMU data is invented, a read returns "the command" not a register value) */
+    if (!fixed && d->is_spmi) {   /* 0.4.229/234/240 MODELLED (ASSUMPTION, PLACEHOLDER): SPMI controller (+0x0 status bit 24 = RX FIFO empty, +0x8 response FIFO pop, +0x20.. enable, +0x78 irq status) */
+        int bank = 0; uint64_t r = spmi_ctrl_off(d->is_spmi, off, &bank);
+        if (bank && r >= 0x20 && r < 0x40) { val = d->sp_en[(r - 0x20) >> 2]; fixed = 7; }
+        else if (bank && r == 0x78) { val = d->sp_irq; fixed = 7; }
+        else if (r == 0) { uint32_t tx_empty = (d->is_spmi == 2) ? 0x00000100u : 0; val = tx_empty | (d->sp_n ? 0 : 0x01000000u); fixed = 7; }   /* MODELLED (ASSUMPTION, PLACEHOLDER): AppleT8101SPMIController checks both RX-empty (bit 24) and CMD/TX-empty (bit 8) == 0x01000100 (0xfffffe00090c9440) */
+        else if (r == 8) { if (d->sp_n) { val = d->sp_fifo[0]; for (unsigned q = 1; q < d->sp_n; q++) d->sp_fifo[q - 1] = d->sp_fifo[q]; d->sp_n--; } fixed = 7; }
+    }
     if (!fixed && d->is_i2c && off == 0x14) { val = d->i2c_st | 0x01000000u; fixed = 6; }   /* 0.4.219 MODELLED (ASSUMPTION): I2C controller of an idle, empty bus: status bit 24 reads 1. Source: _checkBusStatus asserts when bit 24 is 0 ("SCL is stuck low" side); it is read as the SCL line level */
     if (!fixed && d->rb && off < sizeof d->rbv) { val = d->rbv[off >> 2]; fixed = 2; }   /* 0.4.61: read-back block */
     if (!fixed) for (int k = 0; k < d->lk_n; k++) if (d->lk_r[k] == off && d->lk_set[k]) { val = (d->lk_v[k] << 10) | (d->lk_v[k] << 5); fixed = 4; }   /* 0.4.135 mode link, see a64m_unknown_set_modelink */
@@ -155,10 +164,16 @@ static void unk_w(void *u, uint64_t off, unsigned sz, uint64_t v) { (void)sz;
     struct Unk *d = u; d->writes++; d->last_off = off; if (d->ts_n) ts_trace(d, 1, off, v); i2_trace(d, 1, off, v);
     if (d->is_aic && !(off >= 0x3000 && off < 0x4000 && !v)) { int k = 0; while (k < d->aw_cnt && d->aw_off[k] != (uint16_t)off) k++; if (k == d->aw_cnt && k < 128) { d->aw_off[k] = (uint16_t)off; d->aw_cnt++; } if (k < 128) { d->aw_or[k] |= (uint32_t)v; d->aw_n[k]++; } }   /* 0.4.235 diagnostic: distinct written offsets with the OR of the values */
     if (d->is_aic) { if (off >= 0x4100 && off < 0x4140) d->aic_mask[(off - 0x4100) >> 2] |= (uint32_t)v; else if (off >= 0x4180 && off < 0x41c0) d->aic_mask[(off - 0x4180) >> 2] &= ~(uint32_t)v; aic_update(d); }
-    if (d->is_spmi && off >= 0x720 && off < 0x740) d->sp_en[(off - 0x720) >> 2] = (uint32_t)v;
-    if (d->is_spmi && off == 0x778) d->sp_irq &= ~(uint32_t)v;   /* write-1-to-clear: polled mode writes back (status & mask) */
-    if (d->is_spmi && off == 0x704 && v) { d->sp_irq |= 1u; a64m_aic_raise(d->m, 234); }   /* 0.4.239 MODELLED (ASSUMPTION): every command "completes" at once with interrupt 234 (0xea): the 2nd entry of the spmi node's "interrupts" list and the only one of them the kernel unmasked (0.4.236 AIC MASK_CLR word 7 = 0x3000470 has bit 10). 204 (0.4.237) is NOT spmi's: it is dart-aop (panic "Max spurious DART/SMMU interrupts", dart-aop) */
-    if (d->is_spmi && (off == 0x704 || off == 0xd04) && v && d->sp_n < 16) d->sp_fifo[d->sp_n++] = (uint32_t)v;   /* 0.4.229: non-zero command word -> one response */
+    if (d->is_spmi) {
+        int bank = 0; uint64_t r = spmi_ctrl_off(d->is_spmi, off, &bank);
+        if (bank && r >= 0x20 && r < 0x40) d->sp_en[(r - 0x20) >> 2] = (uint32_t)v;
+        else if (bank && r == 0x78) d->sp_irq &= ~(uint32_t)v;   /* write-1-to-clear: polled mode writes back (status & mask) */
+        else if (r == 4 && v) {
+            if (d->is_spmi == 1 && off == 0x704) { d->sp_irq |= 1u; a64m_aic_raise(d->m, 234); }   /* 0.4.239 MODELLED (ASSUMPTION): irq 234 on 'spmi' */
+            else if (d->is_spmi == 2) d->sp_irq |= 1u;
+            if (d->sp_n < 16) d->sp_fifo[d->sp_n++] = (uint32_t)v;   /* 0.4.229: non-zero command word -> one response */
+        }
+    }
     if (d->is_i2c && off == 0x14) d->i2c_st &= ~(uint32_t)v;   /* 0.4.219: status event bits are write-1-to-clear (the driver writes back what it read); bit 24 is a LEVEL, see unk_r */
     if (d->is_mem && off >= 0xa000 && off <= 0xa080 && (off & 3) == 0) d->mem_dsid[(off - 0xa000) >> 2] = (uint32_t)v;
     if (d->rb && off < sizeof d->rbv) d->rbv[off >> 2] = (uint32_t)v;
@@ -174,7 +189,7 @@ static int add_unknown(A64Machine *m, uint64_t pa, uint64_t size, const char *la
     int slot = -1; for (int k = 0; k < g_unk_n; k++) if (g_unk[k].m == m && g_unk[k].pa == pa) slot = k;   /* a stale entry of a destroyed machine that got the same address */
     if (slot < 0) for (int k = 0; k < g_unk_n; k++) if (!g_unk[k].m) { slot = k; break; }   /* free slot of a destroyed machine */
     if (slot < 0) { if (g_unk_n >= 600) return -1; slot = g_unk_n++; }
-    struct Unk *d = &g_unk[slot], keep = *d; memset(d, 0, sizeof *d); d->m = m; d->pa = pa; d->cap = cap; if (label) snprintf(d->label, sizeof d->label, "'%.38s'", label); d->is_i2c = label && strstr(label, "i2c") != NULL; d->is_dart = label && !strncmp(label, "dart", 4); d->is_spmi = label && !strcmp(label, "spmi"); d->is_aic = label && !strcmp(label, "aic"); if (d->is_aic) for (int z = 0; z < 16; z++) d->aic_mask[z] = 0xffffffffu; d->is_mem = pa == 0x200000000ull || (label && !strcmp(label, "mem")); if (d->is_mem) for (int z = 0; z < 33; z++) d->mem_dsid[z] = 0x007f0000u;
+    struct Unk *d = &g_unk[slot], keep = *d; memset(d, 0, sizeof *d); d->m = m; d->pa = pa; d->size = size; d->cap = cap; if (label) snprintf(d->label, sizeof d->label, "'%.38s'", label); d->is_i2c = label && strstr(label, "i2c") != NULL; d->is_dart = label && !strncmp(label, "dart", 4); d->is_spmi = (label && !strcmp(label, "spmi")) ? 1 : (label && strstr(label, "spmi") && !strstr(label, "pmu")) ? 2 : 0; d->is_aic = label && !strcmp(label, "aic"); if (d->is_aic) for (int z = 0; z < 16; z++) d->aic_mask[z] = 0xffffffffu; d->is_mem = pa == 0x200000000ull || (label && !strcmp(label, "mem")); if (d->is_mem) for (int z = 0; z < 33; z++) d->mem_dsid[z] = 0x007f0000u; if (label && strstr(label, "pmgr")) d->ps = 1;   /* MODELLED (ASSUMPTION, PLACEHOLDER): all pmgr blocks/slices mirror power states (bits 7:4 = bits 3:0 on read-back) */
     A64Dev dev = { pa, size, unk_r, unk_w, d, "unknown-soc" };
     if (a64_add_device(&m->cpu, &dev)) { *d = keep; return -1; }   /* 0.4.59: a refused add (overlap with the SAME block added earlier) must not wipe the live entry: this lost the 'aic' +0x4 value in 0.4.58 */
     return 0;
@@ -221,8 +236,17 @@ int a64m_unknown_ts_window(A64Machine *m, uint64_t block_pa, uint64_t base_off) 
     for (int k = g_unk_n - 1; k >= 0; k--) if (g_unk[k].m == m && g_unk[k].pa == block_pa) { struct Unk *d = &g_unk[k]; if (d->ts_n >= 16) return -1; d->ts_base[d->ts_n] = base_off; return d->ts_n++; }
     return -1;
 }
+static int ts_add_reg(struct Unk *d, uint64_t off, uint64_t val) {
+    for (int i = 0; i < d->ts_rn; i++) if (d->ts_off[i] == off) { d->ts_val[i] = val; return 0; }
+    if (d->ts_rn >= (int)(sizeof d->ts_off / sizeof d->ts_off[0])) return -1;
+    d->ts_off[d->ts_rn] = off; d->ts_val[d->ts_rn++] = val; return 0;
+}
 int a64m_unknown_ts_read(A64Machine *m, uint64_t block_pa, uint64_t off, uint64_t val) {
-    for (int k = g_unk_n - 1; k >= 0; k--) if (g_unk[k].m == m && g_unk[k].pa == block_pa) { struct Unk *d = &g_unk[k]; if (d->ts_rn >= 160) return -1; d->ts_off[d->ts_rn] = off; d->ts_val[d->ts_rn++] = val; return 0; }
+    for (int k = g_unk_n - 1; k >= 0; k--) if (g_unk[k].m == m && g_unk[k].pa == block_pa) return ts_add_reg(&g_unk[k], off, val);
+    return -1;
+}
+int a64m_unknown_ts_pa(A64Machine *m, uint64_t pa, uint64_t val) {
+    for (int k = g_unk_n - 1; k >= 0; k--) if (g_unk[k].m == m && pa >= g_unk[k].pa && pa < g_unk[k].pa + g_unk[k].size) return ts_add_reg(&g_unk[k], pa - g_unk[k].pa, val);
     return -1;
 }
 int a64m_unknown_set_psmirror(A64Machine *m, uint64_t pa) {
@@ -277,7 +301,7 @@ void a64m_touch(A64Machine *m, int x, int y, bool down) {
 }
 
 void a64m_set_video(A64Machine *m, uint64_t pa, uint32_t w, uint32_t h, uint32_t rowbytes) { m->vid.pa = pa; m->vid.w = w; m->vid.h = h; m->vid.rowbytes = rowbytes; m->vid.sum = 0; m->vid.frame = 0; }
-int64_t a64m_frame(A64Machine *m, uint32_t *dst, int w, int h) {
+static int64_t read_frame_impl(A64Machine *m, int64_t last_frame, bool check_last, uint32_t *dst, int w, int h) {
     if (!m->fb.enable) {
         /* IPSW attempt: the linear framebuffer described by boot_args.Video. There is no "present" signal, so the frame counter advances when the content changes. */
         if (!m->vid.pa || w != (int)m->vid.w || h != (int)m->vid.h) return -1;
@@ -286,18 +310,28 @@ int64_t a64m_frame(A64Machine *m, uint32_t *dst, int w, int h) {
         uint64_t sum = 1469598103934665603ull;
         for (int y = 0; y < h; y++) {
             const uint32_t *s = (const uint32_t *)(const void *)(p + (size_t)y * m->vid.rowbytes);
-            for (int x = 0; x < w; x++) { dst[(size_t)y * (size_t)w + (size_t)x] = 0xFF000000u | (s[x] & 0xFFFFFFu); sum = (sum ^ s[x]) * 1099511628211ull; }
+            for (int x = 0; x < w; x++) sum = (sum ^ s[x]) * 1099511628211ull;
         }
         if (sum != m->vid.sum) { m->vid.sum = sum; m->vid.frame++; }
+        else if (check_last && m->vid.frame == last_frame) return m->vid.frame;
+        for (int y = 0; y < h; y++) {
+            const uint32_t *s = (const uint32_t *)(const void *)(p + (size_t)y * m->vid.rowbytes);
+            uint32_t *d = dst + (size_t)y * (size_t)w;
+            for (int x = 0; x < w; x++) d[x] = 0xFF000000u | (s[x] & 0xFFFFFFu);
+        }
         return m->vid.frame;
     }
     uint64_t bytes = (uint64_t)A64M_FB_W * A64M_FB_H * 4;
     uint8_t *p = a64m_ram_at(m, m->fb.addr, bytes);
     if (!p || w != A64M_FB_W || h != A64M_FB_H) return -1;
+    int64_t f = (int64_t)__atomic_load_n(&m->fb.frame, __ATOMIC_ACQUIRE);
+    if (check_last && f == last_frame) return f;
     const uint32_t *s = (const uint32_t *)(const void *)p;
     for (int k = 0; k < A64M_FB_W * A64M_FB_H; k++) dst[k] = 0xFF000000u | (s[k] & 0xFFFFFFu);
-    return (int64_t)__atomic_load_n(&m->fb.frame, __ATOMIC_ACQUIRE);
+    return f;
 }
+int64_t a64m_frame(A64Machine *m, uint32_t *dst, int w, int h) { return read_frame_impl(m, -1, false, dst, w, h); }
+int64_t a64m_frame_if_changed(A64Machine *m, int64_t last_frame, uint32_t *dst, int w, int h) { return read_frame_impl(m, last_frame, true, dst, w, h); }
 
 /* ---------------------------------------------------------- lifecycle */
 static void user_out(void *u, const char *b, size_t n) { log_raw((A64Machine *)u, b, n); }
@@ -960,9 +994,10 @@ A64MState a64m_run(A64Machine *m, uint64_t max_steps, bool realtime) {
         if (r == A64_RUN_HALTED) { finish(m, A64M_POWEROFF); return m->state; }
         if (r == A64_RUN_IDLE) {
             uint64_t t = m->cpu.idle_ticks;
-            if (!realtime) {
+            if (!realtime || m->attempt) {
                 if (t) { a64_advance_time(&m->cpu, t); m->cpu.idle_ticks = 0; }
-                else { m->state = A64M_IDLE; return m->state; }   /* nothing can ever wake it */
+                else if (!realtime) { m->state = A64M_IDLE; return m->state; }   /* nothing can ever wake it */
+                else { struct timespec ts = { 0, 2000000L }; nanosleep(&ts, NULL); done += 1; }
             } else {
                 uint64_t us = t ? t * 1000000ull / A64_TIMER_HZ : 5000;
                 if (us > 5000) us = 5000;

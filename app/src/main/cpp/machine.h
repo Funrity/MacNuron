@@ -75,6 +75,7 @@ int a64m_unknown_set_modelink(A64Machine *m, uint64_t pa, uint64_t w_off, uint64
 int a64m_unknown_lastreads(A64Machine *m, char *out, size_t cap);
 int a64m_unknown_ts_window(A64Machine *m, uint64_t block_pa, uint64_t base_off);   /* 0.4.150 range of one temperature sensor inside a block (trace only) */
 int a64m_unknown_ts_read(A64Machine *m, uint64_t block_pa, uint64_t off, uint64_t val);   /* 0.4.150 MODELLED fixed read of a sensor register */
+int a64m_unknown_ts_pa(A64Machine *m, uint64_t pa, uint64_t val);   /* MODELLED fixed read of a sensor register by physical address */
 const char *a64m_tempsensor_trace(void);
 const char *a64m_i2c_trace(void);
 int a64m_unknown_rw(A64Machine *m, uint64_t pa, int w, uint64_t off, uint64_t v, uint64_t *rv);   /* 0.4.218, for tests */   /* 0.4.217 diagnostic */   /* 0.4.147 diagnostic: first accesses to the temperature sensor windows */
@@ -134,6 +135,7 @@ void a64m_touch(A64Machine *m, int x, int y, bool down);
 /* Copies the guest framebuffer as 0xAARRGGBB; returns frame counter, or -1 if the guest
  * has not enabled the display. */
 int64_t a64m_frame(A64Machine *m, uint32_t *dst, int w, int h);
+int64_t a64m_frame_if_changed(A64Machine *m, int64_t last_frame, uint32_t *dst, int w, int h);
 /* IPSW attempt: describe the linear 32-bit framebuffer handed to the kernel in boot_args.Video; a64m_frame then shows it (frame counter = content changed) */
 void a64m_set_video(A64Machine *m, uint64_t pa, uint32_t w, uint32_t h, uint32_t rowbytes);
 
